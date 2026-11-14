@@ -1,0 +1,56 @@
+GLAMOUR STORE — STARTER PROJECT
+================================
+
+This is the first working-code foundation for the shop. It is NOT yet a live shop:
+you must connect a database and test it before sharing the customer link.
+
+WHAT IS INCLUDED
+- Customer shop page and product search
+- Cart and checkout
+- Post Office delivery: Rs. 250
+- Courier delivery: Rs. 500
+- Payment choices: COD and Bank Transfer only (no card payment)
+- Owner sign-in, product creation, stock editing, order list and order status
+- Responsive layout; can be hosted as a website and later made installable as a PWA
+
+LOW-COST PLAN
+- Supabase free tier: database and owner login
+- Netlify or Vercel free tier: host the website
+- Free provider subdomain initially; custom domain can wait
+Free plans have limits and can change. They are not a guarantee of permanent zero cost.
+
+NEXT SETUP STEPS
+1. Install Node.js LTS on the laptop from https://nodejs.org/
+2. Create a free Supabase account at https://supabase.com/ and create a project.
+3. In Supabase, open SQL Editor, paste and run supabase/schema.sql.
+4. In Supabase Authentication settings, enable Email/Password.
+5. Create the owner's user in Authentication > Users (use your own email and a strong password).
+6. Copy that user's UUID. In SQL Editor run:
+   insert into public.admin_users(user_id) values ('PASTE-OWNER-USER-UUID-HERE');
+7. In Supabase Project Settings > API, copy Project URL and anon/public key.
+8. Copy .env.example to a new file named .env and fill in:
+   VITE_SUPABASE_URL
+   VITE_SUPABASE_ANON_KEY
+   VITE_OWNER_EMAIL (informational; owner authorization is enforced by admin_users table)
+9. Open a terminal in this project folder and run:
+   npm install
+   npm run dev
+10. Open the local URL shown by Vite to test.
+
+IMPORTANT LIMITATIONS TO FIX BEFORE REAL CUSTOMERS
+- Bank transfer instructions/account details and receipt upload are not yet implemented.
+- Order creation currently inserts order and items in two requests; a failed second request can leave an incomplete order.
+- Stock is displayed and editable but not yet automatically deducted when orders are placed.
+- Add server-side validation, spam protection, and atomic checkout/stock deduction before launch.
+- Do not put Supabase service-role keys in the website. Only use the anon/public key.
+- Test with sample orders before public sharing.
+- Keep the Supabase database password safe.
+
+BACKUP
+Keep this ZIP and every later milestone ZIP on your laptop. If starting a new chat,
+upload the latest ZIP and say: "Continue Glamour Store from this project backup."
+
+NEXT DETAILS TO DECIDE
+- Bank name, account name and account number to show customers (do not send passwords/PINs).
+- Whether customer should upload a bank transfer receipt or send it through WhatsApp.
+- Shop WhatsApp contact number, if you want it displayed.

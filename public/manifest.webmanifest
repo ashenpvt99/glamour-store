@@ -1,0 +1,9 @@
+{
+  "name": "Glamour Store",
+  "short_name": "Glamour",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fffaf8",
+  "theme_color": "#8c5a6b",
+  "icons": []
+}

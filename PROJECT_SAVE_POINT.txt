@@ -1,0 +1,20 @@
+GLAMOUR STORE PROJECT SAVE POINT
+Date: 14 November 2026
+
+Confirmed requirements:
+- Shop name: Glamour Store.
+- Customer side: public shopping link; customers do not install an app.
+- Owner side: separate protected dashboard, installable on phone if practical.
+- Delivery choices: Post Office Rs. 250; Courier Rs. 500.
+- Payment choices ONLY: COD and Bank Transfer. Card payments are excluded.
+- Owner can add, edit, remove products and update photos, descriptions, prices and stock any time.
+- Keep costs as close to zero as practical initially; upgrade as the business grows.
+- Products can be added later by the owner.
+
+Included in this ZIP:
+- Initial React/Vite customer shop + owner dashboard code.
+- Supabase SQL schema.
+- Setup guide.
+- Known pre-launch gaps are listed in SETUP_GUIDE.txt.
+
+Continue from this ZIP, inspect files, and do not assume the shop is live yet.
