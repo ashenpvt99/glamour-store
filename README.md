@@ -1,1 +1,1 @@
-# glamour-store
+# Glamour Store
