@@ -10,6 +10,31 @@ import {
 } from 'lucide-react';
 
 const money = n => `Rs. ${Number(n || 0).toLocaleString('en-LK')}`;
+
+function formatOrderDateTime(value) {
+  if (!value) return { date: 'Not available', time: 'Not available' };
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { date: 'Not available', time: 'Not available' };
+  }
+
+  const options = { timeZone: 'Asia/Colombo' };
+  return {
+    date: date.toLocaleDateString('en-LK', {
+      ...options,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    }),
+    time: date.toLocaleTimeString('en-LK', {
+      ...options,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    })
+  };
+}
 const DELIVERY = { post: 250, courier: 500 };
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -28,6 +53,11 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [resetMode, setResetMode] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
   const [editingProduct, setEditingProduct] = useState(null);
 
@@ -139,7 +169,14 @@ export default function App() {
       });
 
       const { data: listener } = supabase.auth.onAuthStateChange(
-        (_event, session) => setOwner(session?.user || null)
+        (event, session) => {
+          setOwner(session?.user || null);
+          if (event === 'PASSWORD_RECOVERY') {
+            setRecoveryMode(true);
+            setResetMode(false);
+            setTab('dashboard');
+          }
+        }
       );
 
       return () => listener.subscription.unsubscribe();
@@ -277,6 +314,70 @@ export default function App() {
     } else {
       setNotice('Signed in');
       setTab('dashboard');
+    }
+  }
+
+  async function sendPasswordReset(e) {
+    e.preventDefault();
+    if (!supabase) return setNotice('Supabase is not connected.');
+    if (!loginEmail.trim()) return setNotice('Please enter your owner email first.');
+    setLoading(true);
+    setNotice('');
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.trim(), {
+        redirectTo: window.location.origin
+      });
+      if (error) throw error;
+      setNotice('Password reset email sent. Please check your inbox and Spam folder.');
+      setResetMode(false);
+    } catch (err) {
+      setNotice(err.message || 'Could not send password reset email.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveRecoveredPassword(e) {
+    e.preventDefault();
+    if (newPassword.length < 6) return setNotice('Password must contain at least 6 characters.');
+    if (newPassword !== confirmPassword) return setNotice('Passwords do not match.');
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setRecoveryMode(false);
+      setNewPassword('');
+      setConfirmPassword('');
+      setNotice('Password changed successfully. Please sign in with your new password.');
+      await supabase.auth.signOut();
+      setOwner(null);
+    } catch (err) {
+      setNotice(err.message || 'Could not update password.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function changeOwnerPassword(e) {
+    e.preventDefault();
+    if (!currentPassword || !newPassword) return setNotice('Please fill in all password fields.');
+    if (newPassword.length < 6) return setNotice('New password must contain at least 6 characters.');
+    if (newPassword !== confirmPassword) return setNotice('New passwords do not match.');
+    setLoading(true);
+    try {
+      const { error: verifyError } = await supabase.auth.signInWithPassword({
+        email: owner.email,
+        password: currentPassword
+      });
+      if (verifyError) throw new Error('Current password is incorrect.');
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+      setNotice('Owner password changed successfully.');
+    } catch (err) {
+      setNotice(err.message || 'Could not change password.');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -833,32 +934,36 @@ export default function App() {
 
       {tab === 'dashboard' && (
         <main className="section dashboard">
-          {!owner ? (
+          {recoveryMode ? (
+            <div className="loginbox">
+              <span className="eyebrow">PASSWORD RECOVERY</span>
+              <h2>Set new password</h2>
+              <p>Enter and confirm your new owner password.</p>
+              <form onSubmit={saveRecoveredPassword}>
+                <label>New password<input type="password" minLength={6} required value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label>
+                <label>Confirm new password<input type="password" minLength={6} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label>
+                <button className="primary full" disabled={loading}>{loading ? 'Updating...' : 'Update password'}</button>
+              </form>
+            </div>
+          ) : !owner ? (
             <div className="loginbox">
               <span className="eyebrow">OWNER ACCESS</span>
-              <h2>Welcome back</h2>
-              <p>Sign in to manage products and customer orders.</p>
-              <form onSubmit={signIn}>
-                <label>
-                  Email
-                  <input
-                    type="email"
-                    required
-                    value={loginEmail}
-                    onChange={e => setLoginEmail(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Password
-                  <input
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={e => setLoginPassword(e.target.value)}
-                  />
-                </label>
-                <button className="primary full">Sign in</button>
-              </form>
+              <h2>{resetMode ? 'Reset password' : 'Welcome back'}</h2>
+              <p>{resetMode ? 'Enter your owner email and we will send a reset link.' : 'Sign in to manage products and customer orders.'}</p>
+              {resetMode ? (
+                <form onSubmit={sendPasswordReset}>
+                  <label>Email<input type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)} /></label>
+                  <button className="primary full" disabled={loading}>{loading ? 'Sending...' : 'Send reset email'}</button>
+                  <button type="button" className="secondary full" onClick={() => setResetMode(false)}>Back to sign in</button>
+                </form>
+              ) : (
+                <form onSubmit={signIn}>
+                  <label>Email<input type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)} /></label>
+                  <label>Password<input type="password" required value={loginPassword} onChange={e => setLoginPassword(e.target.value)} /></label>
+                  <button className="primary full">Sign in</button>
+                  <button type="button" className="secondary full" onClick={() => setResetMode(true)} style={{ marginTop: '10px' }}>Forgot password?</button>
+                </form>
+              )}
               <small>Owner account is created in Supabase during setup.</small>
             </div>
           ) : (
@@ -952,6 +1057,12 @@ export default function App() {
                   <Plus size={16} /> New Order
                 </button>
                 <button
+                  className={adminTab === 'settings' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('settings')}
+                >
+                  Change Password
+                </button>
+                <button
                   className={adminTab === 'lowstock' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('lowstock')}
                 >
@@ -970,6 +1081,19 @@ export default function App() {
                   )}
                 </button>
               </div>
+
+              {adminTab === 'settings' && (
+                <div className="panel">
+                  <h3>Change owner password</h3>
+                  <p className="muted">Confirm your current password, then choose a new password.</p>
+                  <form className="checkout" onSubmit={changeOwnerPassword}>
+                    <input type="password" required placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} />
+                    <input type="password" required minLength={6} placeholder="New password (at least 6 characters)" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+                    <input type="password" required minLength={6} placeholder="Confirm new password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
+                    <button className="primary full" disabled={loading}>{loading ? 'Updating...' : 'Change password'}</button>
+                  </form>
+                </div>
+              )}
 
               {adminTab === 'lowstock' && (
                 <div className="panel">
@@ -1266,6 +1390,16 @@ export default function App() {
                             <option>Cancelled</option>
                           </select>
                         </div>
+
+                        {(() => {
+                          const orderDateTime = formatOrderDateTime(o.created_at);
+                          return (
+                            <p style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span><CalendarDays size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Date: <b>{orderDateTime.date}</b></span>
+                              <span><Clock size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Time: <b>{orderDateTime.time}</b></span>
+                            </p>
+                          );
+                        })()}
 
                         <p>{o.phone} · {o.address}</p>
                         <p>
