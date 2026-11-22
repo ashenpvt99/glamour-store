@@ -83,7 +83,7 @@ function printOrderReceipt(order) {
   <section class="meta"><div><p><b>Receipt No:</b> ${escapeReceiptHtml(orderNumber)}</p><p><b>Date:</b> ${escapeReceiptHtml(dateTime.date)}</p><p><b>Time:</b> ${escapeReceiptHtml(dateTime.time)}</p></div>
   <div><p><b>Customer:</b> ${escapeReceiptHtml(order.customer_name)}</p><p><b>Phone:</b> ${escapeReceiptHtml(order.phone)}</p><p><b>Address:</b> ${escapeReceiptHtml(order.address)}</p></div></section>
   <table><thead><tr><th>Product</th><th class="center">Qty</th><th class="right">Amount</th></tr></thead><tbody>${items}</tbody></table>
-  <section class="totals"><div class="totalrow"><span>Delivery (${escapeReceiptHtml(deliveryName)})</span><b>${money(order.delivery_fee)}</b></div>
+  <section class="totals">${Number(order.discount_amount || 0) > 0 ? `<div class="totalrow"><span>Discount (${escapeReceiptHtml(order.discount_name || 'Offer')})</span><b>-${money(order.discount_amount)}</b></div>` : ''}<div class="totalrow"><span>Delivery (${escapeReceiptHtml(deliveryName)})</span><b>${money(order.delivery_fee)}</b></div>
   <div class="totalrow"><span>Payment</span><b>${escapeReceiptHtml(paymentName)}</b></div>
   <div class="totalrow"><span>Payment status</span><b>${escapeReceiptHtml(order.payment_status || 'Pending')}</b></div>
   <div class="totalrow grand"><span>Total</span><span>${money(order.total)}</span></div></section>
@@ -122,6 +122,7 @@ function openOrderWhatsApp(order) {
     'Items:',
     items || 'Order items',
     '',
+    ...(Number(order.discount_amount || 0) > 0 ? [`Discount: ${order.discount_name || 'Offer'} (-${money(order.discount_amount)})`] : []),
     `Delivery: ${deliveryName} (${money(order.delivery_fee)})`,
     `Payment: ${paymentName}`,
     `Order Total: ${money(order.total)}`,
@@ -139,6 +140,9 @@ export default function App() {
   const [tab, setTab] = useState('shop');
   const [adminTab, setAdminTab] = useState('products');
   const [products, setProducts] = useState([]);
+  const [discounts, setDiscounts] = useState([]);
+  const [editingDiscount, setEditingDiscount] = useState(null);
+  const [discountForm, setDiscountForm] = useState({ name: '', discount_type: 'percentage', discount_value: '' });
   const [cart, setCart] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -183,14 +187,23 @@ export default function App() {
   const subtotal = cart.reduce(
     (s, item) => s + Number(item.price) * item.qty, 0
   );
+  const activeDiscount = discounts.find(d => d.active) || null;
+  function calculateDiscount(amount) {
+    if (!activeDiscount || Number(amount) <= 0) return 0;
+    const value = Number(activeDiscount.discount_value || 0);
+    if (activeDiscount.discount_type === 'percentage') return Math.min(Number(amount), Number(amount) * value / 100);
+    return Math.min(Number(amount), value);
+  }
+  const discountAmount = calculateDiscount(subtotal);
   const deliveryFee = DELIVERY[form.delivery];
-  const total = subtotal + deliveryFee;
+  const total = Math.max(0, subtotal - discountAmount + deliveryFee);
 
   const manualSubtotal = manualItems.reduce(
     (s, item) => s + Number(item.price) * item.qty, 0
   );
+  const manualDiscountAmount = calculateDiscount(manualSubtotal);
   const manualDeliveryFee = DELIVERY[manualForm.delivery];
-  const manualTotal = manualSubtotal + manualDeliveryFee;
+  const manualTotal = Math.max(0, manualSubtotal - manualDiscountAmount + manualDeliveryFee);
 
   const lowStockProducts = products.filter(
     p => Number(p.stock) > 0 && Number(p.stock) <= LOW_STOCK_LIMIT
@@ -248,7 +261,7 @@ export default function App() {
 
   function colomboMonthParts(value) {
     const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Colombo', year: 'numeric', month: '2-digit', month: 'short'
+    timeZone: 'Asia/Colombo', year: 'numeric', month: 'short'
     }).formatToParts(new Date(value));
     const get = type => parts.find(part => part.type === type)?.value || '';
     return { key: `${get('year')}-${get('month')}`, label: `${get('month')} ${get('year')}` };
@@ -293,6 +306,49 @@ export default function App() {
   })();
   const maxMonthlySales = Math.max(1, ...monthlySales.map(month => month.revenue));
 
+  async function loadDiscounts() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from('discounts').select('*').order('created_at', { ascending: false });
+    if (error) { setNotice(error.message); return; }
+    setDiscounts(data || []);
+  }
+
+  async function saveDiscount(e) {
+    e.preventDefault();
+    if (!discountForm.name.trim() || !(Number(discountForm.discount_value) > 0)) { setNotice('Enter a discount name and a value greater than zero.'); return; }
+    setLoading(true); setNotice('');
+    try {
+      const payload = { name: discountForm.name.trim(), discount_type: discountForm.discount_type, discount_value: Number(discountForm.discount_value), active: editingDiscount ? !!editingDiscount.active : false };
+      const result = editingDiscount
+        ? await supabase.from('discounts').update(payload).eq('id', editingDiscount.id)
+        : await supabase.from('discounts').insert(payload);
+      if (result.error) throw result.error;
+      setDiscountForm({ name: '', discount_type: 'percentage', discount_value: '' }); setEditingDiscount(null);
+      await loadDiscounts(); setNotice('Discount saved successfully.');
+    } catch (err) { setNotice(err.message || 'Could not save discount.'); }
+    finally { setLoading(false); }
+  }
+
+  async function toggleDiscount(discount) {
+    setLoading(true); setNotice('');
+    try {
+      if (!discount.active) {
+        const { error: offError } = await supabase.from('discounts').update({ active: false }).eq('active', true);
+        if (offError) throw offError;
+      }
+      const { error } = await supabase.from('discounts').update({ active: !discount.active }).eq('id', discount.id);
+      if (error) throw error;
+      await loadDiscounts(); setNotice(discount.active ? 'Discount turned off.' : 'Discount activated.');
+    } catch (err) { setNotice(err.message || 'Could not update discount.'); }
+    finally { setLoading(false); }
+  }
+
+  async function deleteDiscount(id) {
+    if (!confirm('Delete this discount?')) return;
+    const { error } = await supabase.from('discounts').delete().eq('id', id);
+    if (error) setNotice(error.message); else { await loadDiscounts(); setNotice('Discount deleted.'); }
+  }
+
   async function loadProducts() {
     if (!supabase) return;
 
@@ -320,6 +376,7 @@ export default function App() {
 
   useEffect(() => {
     loadProducts();
+    loadDiscounts();
 
     if (supabase) {
       supabase.auth.getSession().then(({ data }) => {
@@ -342,7 +399,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (owner) loadOrders();
+    if (owner) { loadOrders(); loadDiscounts(); }
   }, [owner]);
 
   function addToCart(p) {
@@ -428,6 +485,10 @@ export default function App() {
           payment_method: form.payment,
           note: form.note,
           subtotal,
+          discount_name: discountAmount > 0 ? activeDiscount?.name : null,
+          discount_type: discountAmount > 0 ? activeDiscount?.discount_type : null,
+          discount_value: discountAmount > 0 ? Number(activeDiscount?.discount_value || 0) : 0,
+          discount_amount: discountAmount,
           total,
           payment_status: form.payment === 'cod'
             ? 'Pay on delivery'
@@ -923,6 +984,10 @@ export default function App() {
           payment_method: manualForm.payment,
           note: manualForm.note,
           subtotal: manualSubtotal,
+          discount_name: manualDiscountAmount > 0 ? activeDiscount?.name : null,
+          discount_type: manualDiscountAmount > 0 ? activeDiscount?.discount_type : null,
+          discount_value: manualDiscountAmount > 0 ? Number(activeDiscount?.discount_value || 0) : 0,
+          discount_amount: manualDiscountAmount,
           total: manualTotal,
           payment_status: manualForm.payment === 'cod'
             ? 'Pay on delivery'
@@ -1379,6 +1444,12 @@ export default function App() {
                   )}
                 </button>
                 <button
+                  className={adminTab === 'discounts' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('discounts')}
+                >
+                  <TrendingUp size={16} /> Discounts
+                </button>
+                <button
                   className={adminTab === 'reports' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('reports')}
                 >
@@ -1680,6 +1751,31 @@ export default function App() {
                 </>
               )}
 
+              {adminTab === 'discounts' && (
+                <div className="panel">
+                  <h3>Discount offers</h3>
+                  <p className="muted">Create a percentage or fixed-value offer. Only one offer can be active at a time.</p>
+                  <form className="productform" onSubmit={saveDiscount}>
+                    <input required placeholder="Discount name" value={discountForm.name} onChange={e => setDiscountForm({ ...discountForm, name: e.target.value })} />
+                    <select value={discountForm.discount_type} onChange={e => setDiscountForm({ ...discountForm, discount_type: e.target.value })}>
+                      <option value="percentage">Percentage (%)</option><option value="fixed">Fixed amount (Rs.)</option>
+                    </select>
+                    <input required type="number" min="0.01" step="0.01" placeholder={discountForm.discount_type === 'percentage' ? 'Discount percentage' : 'Discount amount (Rs.)'} value={discountForm.discount_value} onChange={e => setDiscountForm({ ...discountForm, discount_value: e.target.value })} />
+                    <button className="primary" disabled={loading}>{editingDiscount ? 'Update discount' : 'Save discount'}</button>
+                    {editingDiscount && <button type="button" className="secondary" onClick={() => { setEditingDiscount(null); setDiscountForm({ name: '', discount_type: 'percentage', discount_value: '' }); }}>Cancel edit</button>}
+                  </form>
+                  {discounts.length === 0 ? <p className="muted">No discounts created yet.</p> : discounts.map(d => (
+                    <div className="manage-row" key={d.id}>
+                      <span style={{ flex: 1 }}><b>{d.name}</b><small>{d.discount_type === 'percentage' ? `${d.discount_value}% off` : `${money(d.discount_value)} off`}</small></span>
+                      <b style={{ color: d.active ? '#15803d' : '#777' }}>{d.active ? 'ACTIVE' : 'OFF'}</b>
+                      <button type="button" className="secondary" disabled={loading} onClick={() => toggleDiscount(d)}>{d.active ? 'Turn off' : 'Activate'}</button>
+                      <button type="button" className="secondary" onClick={() => { setEditingDiscount(d); setDiscountForm({ name: d.name || '', discount_type: d.discount_type || 'percentage', discount_value: String(d.discount_value ?? '') }); }}>Edit</button>
+                      <button type="button" className="textdanger" onClick={() => deleteDiscount(d.id)}>Delete</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {adminTab === 'reports' && (
                 <div className="panel">
                   <h3><TrendingUp size={18} /> Sales & Profit Reports</h3>
@@ -1813,6 +1909,7 @@ export default function App() {
                           {' '}({money(o.delivery_fee)}) · Payment:
                           {' '}<b>{o.payment_method === 'cod' ? 'COD' : 'Bank Transfer'}</b>
                         </p>
+                        {Number(o.discount_amount || 0) > 0 && <p>Discount: <b>{o.discount_name || 'Offer'} (-{money(o.discount_amount)})</b></p>}
                         <p>Total: <b>{money(o.total)}</b> · {o.payment_status}</p>
 
                         {(o.order_items || []).map(i => (
@@ -1967,6 +2064,8 @@ export default function App() {
 
                     <div className="totals">
                       <span>Items</span><b>{money(manualSubtotal)}</b>
+                      <span>Items</span><b>{money(manualSubtotal)}</b>
+                      {manualDiscountAmount > 0 && <><span>{activeDiscount?.name || 'Discount'}</span><b style={{ color: '#15803d' }}>-{money(manualDiscountAmount)}</b></>}
                       <span>{manualForm.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
                       <b>{money(manualDeliveryFee)}</b>
                       <strong>Total</strong><strong>{money(manualTotal)}</strong>
@@ -2091,6 +2190,7 @@ export default function App() {
 
                   <div className="totals">
                     <span>Items</span><b>{money(subtotal)}</b>
+                    {discountAmount > 0 && <><span>{activeDiscount?.name || 'Discount'}</span><b style={{ color: '#15803d' }}>-{money(discountAmount)}</b></>}
                     <span>{form.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
                     <b>{money(deliveryFee)}</b>
                     <strong>Total</strong><strong>{money(total)}</strong>
