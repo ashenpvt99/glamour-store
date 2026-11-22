@@ -510,10 +510,6 @@ export default function App() {
     );
   }
 
-  function updateCartDiscount(id, field, value) {
-    setCart(old => old.map(item => item.id === id ? { ...item, [field]: value } : item));
-  }
-
   function applyActiveDiscountToCart() {
     if (!activeDiscount) return;
     setCart(old => old.map(item => getDiscountForProduct(item.id) ? { ...item, discount_type: activeDiscount.discount_type, discount_value: Number(activeDiscount.discount_value || 0) } : item));
@@ -2267,15 +2263,11 @@ export default function App() {
                           <span style={{ flex: '1 1 150px' }}>
                             <b>{p.name}</b>
                             <small>{money(p.price)} each</small>
-                            <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
-                              <select aria-label={`${p.name} discount type`} value={p.discount_type || ''} onChange={e => updateCartDiscount(p.id, 'discount_type', e.target.value || null)}>
-                                <option value="">No discount</option>
-                                <option value="percentage">Percentage (%)</option>
-                                <option value="fixed">Fixed per item (Rs.)</option>
-                              </select>
-                              <input aria-label={`${p.name} discount value`} type="number" min="0" step="0.01" placeholder="Discount value" value={p.discount_value ?? ''} disabled={!p.discount_type} onChange={e => updateCartDiscount(p.id, 'discount_value', e.target.value)} style={{ width: '125px' }} />
-                            </div>
-                            {itemDiscount > 0 && <small style={{ color: '#15803d' }}>Discount: -{money(itemDiscount)} · Net: {money(gross - itemDiscount)}</small>}
+                            {itemDiscount > 0 && (
+                              <small style={{ display: 'block', marginTop: '8px', color: '#15803d', fontWeight: 600 }}>
+                                Offer discount: -{money(itemDiscount)} · Net: {money(gross - itemDiscount)}
+                              </small>
+                            )}
                           </span>
                           <div className="qty">
                             <button onClick={() => changeQty(p.id, -1)}><Minus size={14} /></button>
