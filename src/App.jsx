@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabase';
 import {
@@ -35,7 +34,6 @@ function formatOrderDateTime(value) {
     })
   };
 }
-
 const DELIVERY = { post: 250, courier: 500 };
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -51,7 +49,8 @@ function calculateLineDiscount(item) {
     return Math.min(gross, gross * Math.min(value, 100) / 100);
   }
   if (item.discount_type === 'fixed') {
-    return Math.min(gross, value);
+    // Fixed discount is per unit, so multiply it by the cart quantity.
+    return Math.min(gross, value * qty);
   }
   return 0;
 }
@@ -262,6 +261,7 @@ export default function App() {
   const lowStockCount = lowStockProducts.length;
   const outOfStockCount = outOfStockProducts.length;
 
+  // Dashboard summary calculations
   const totalSales = orders
     .filter(o => o.status !== 'Cancelled')
     .reduce((sum, o) => sum + Number(o.total || 0), 0);
@@ -274,7 +274,9 @@ export default function App() {
 
   const todayOrders = orders.filter(o => {
     if (!o.created_at) return false;
+
     const orderDate = new Date(o.created_at);
+
     return (
       !Number.isNaN(orderDate.getTime()) &&
       orderDate >= todayStart &&
@@ -290,6 +292,7 @@ export default function App() {
     o => o.status === 'Delivered'
   );
 
+  // Reports include both new item-level discounts and legacy order-level discounts.
   const reportOrders = orders.filter(o => o.status !== 'Cancelled');
   const reportItems = reportOrders.flatMap(o => o.order_items || []);
   const totalProductRevenue = reportItems.reduce(
@@ -403,21 +406,25 @@ export default function App() {
 
   async function loadProducts() {
     if (!supabase) return;
+
     const { data, error } = await supabase
       .from('products')
       .select('*')
       .eq('active', true)
       .order('created_at', { ascending: false });
+
     if (error) setNotice(error.message);
     else setProducts(data || []);
   }
 
   async function loadOrders() {
     if (!supabase || !owner) return;
+
     const { data, error } = await supabase
       .from('orders')
       .select('*, order_items(*)')
       .order('created_at', { ascending: false });
+
     if (error) setNotice(error.message);
     else setOrders(data || []);
   }
@@ -450,23 +457,6 @@ export default function App() {
     if (owner) { loadOrders(); loadDiscounts(); }
   }, [owner]);
 
-  // Keep the customer offer updated when the admin changes an offer.
-  useEffect(() => {
-    if (!supabase) return undefined;
-
-    const refreshDiscounts = () => {
-      if (document.visibilityState === 'visible') loadDiscounts();
-    };
-
-    const interval = window.setInterval(refreshDiscounts, 30000);
-    window.addEventListener('focus', refreshDiscounts);
-
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('focus', refreshDiscounts);
-    };
-  }, []);
-
   function addToCart(p) {
     if (Number(p.stock) <= 0) {
       setNotice('This product is out of stock.');
@@ -475,6 +465,7 @@ export default function App() {
 
     setCart(old => {
       const found = old.find(x => x.id === p.id);
+
       if (found) {
         return old.map(x =>
           x.id === p.id
@@ -528,19 +519,24 @@ export default function App() {
       'create_order_with_stock',
       { p_order: orderDetails, p_items: items }
     );
+
     if (error) throw error;
+
     const order = data?.order;
     if (!order?.id) {
       throw new Error('Order response was not received. Please check your orders.');
     }
+
     return order;
   }
 
   async function placeOrder(e) {
     e.preventDefault();
+
     if (!supabase) {
       return setNotice('Please connect the free database first. See SETUP_GUIDE.txt.');
     }
+
     if (!cart.length) return;
 
     setLoading(true);
@@ -587,7 +583,9 @@ export default function App() {
         name: '', phone: '', address: '',
         delivery: 'post', payment: 'cod', note: ''
       });
+
       await loadProducts();
+
       setNotice(
         `Order placed! Your order number is ${order.id.slice(0, 8).toUpperCase()}. Stock updated successfully.`
       );
@@ -600,6 +598,7 @@ export default function App() {
 
   async function trackCustomerOrder(e) {
     e.preventDefault();
+
     if (!supabase) {
       setNotice('Supabase is not connected.');
       return;
@@ -629,11 +628,13 @@ export default function App() {
         p_order_code: code,
         p_phone: phone
       });
+
       if (error) throw error;
       if (!data?.success) {
         setNotice(data?.message || 'Order not found. Please check your details.');
         return;
       }
+
       setTrackingOrder(data);
     } catch (err) {
       setNotice(err.message || 'Could not track this order. Please try again.');
@@ -644,13 +645,16 @@ export default function App() {
 
   async function signIn(e) {
     e.preventDefault();
+
     if (!supabase) {
       return setNotice('Connect Supabase first. See SETUP_GUIDE.txt.');
     }
+
     const { error } = await supabase.auth.signInWithPassword({
       email: loginEmail,
       password: loginPassword
     });
+
     if (error) {
       setNotice(error.message);
     } else {
@@ -731,36 +735,43 @@ export default function App() {
 
   function handleImageSelect(e) {
     const file = e.target.files?.[0];
+
     if (!file) {
       setSelectedImage(null);
       return;
     }
+
     if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
       setSelectedImage(null);
       e.target.value = '';
       setNotice('Please select a JPG, PNG or WEBP image.');
       return;
     }
+
     if (file.size > MAX_IMAGE_SIZE) {
       setSelectedImage(null);
       e.target.value = '';
       setNotice('Image size must be 5 MB or less.');
       return;
     }
+
     setSelectedImage(file);
     setNotice(`Image selected: ${file.name}`);
   }
 
   async function uploadProductImage(file) {
     if (!file) return null;
+
     const extension = file.name.split('.').pop()?.toLowerCase() || 'jpg';
     const safeExtension = ['jpg', 'jpeg', 'png', 'webp'].includes(extension)
       ? extension
       : 'jpg';
+
     const uniqueName =
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     const filePath = `${uniqueName}.${safeExtension}`;
 
     const { error: uploadError } = await supabase.storage
@@ -770,14 +781,17 @@ export default function App() {
         upsert: false,
         contentType: file.type
       });
+
     if (uploadError) throw uploadError;
 
     const { data } = supabase.storage
       .from('product-images')
       .getPublicUrl(filePath);
+
     if (!data?.publicUrl) {
       throw new Error('Could not get the uploaded image URL.');
     }
+
     return data.publicUrl;
   }
 
@@ -787,12 +801,14 @@ export default function App() {
     });
     setSelectedImage(null);
     setEditingProduct(null);
+
     const fileInput = document.getElementById('product-image-input');
     if (fileInput) fileInput.value = '';
   }
 
   function startEditProduct(p) {
     setEditingProduct(p);
+
     setNewProduct({
       name: p.name || '',
       description: p.description || '',
@@ -800,6 +816,7 @@ export default function App() {
       cost_price: String(p.cost_price ?? ''),
       stock: String(p.stock ?? '')
     });
+
     setSelectedImage(null);
     setNotice(`You are now editing "${p.name}".`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -807,26 +824,32 @@ export default function App() {
 
   async function addProduct(e) {
     e.preventDefault();
+
     if (!supabase) {
       setNotice('Supabase is not connected.');
       return;
     }
+
     if (!owner) {
       setNotice('Please sign in first.');
       return;
     }
+
     if (!newProduct.name.trim()) {
       setNotice('Please enter a product name.');
       return;
     }
+
     if (newProduct.price === '' || !Number.isFinite(Number(newProduct.price)) || Number(newProduct.price) < 0) {
       setNotice('Please enter a valid selling price.');
       return;
     }
+
     if (newProduct.cost_price === '' || !Number.isFinite(Number(newProduct.cost_price)) || Number(newProduct.cost_price) < 0) {
       setNotice('Please enter a valid product cost price.');
       return;
     }
+
     if (
       newProduct.stock === '' ||
       Number(newProduct.stock) < 0 ||
@@ -838,8 +861,10 @@ export default function App() {
 
     setLoading(true);
     setNotice('');
+
     try {
       let imageUrl = editingProduct?.image_url || null;
+
       if (selectedImage) {
         setNotice('Uploading product image...');
         imageUrl = await uploadProductImage(selectedImage);
@@ -847,6 +872,7 @@ export default function App() {
 
       if (editingProduct) {
         setNotice('Updating product...');
+
         const { error } = await supabase
           .from('products')
           .update({
@@ -858,12 +884,15 @@ export default function App() {
             image_url: imageUrl
           })
           .eq('id', editingProduct.id);
+
         if (error) throw error;
+
         resetProductForm();
         await loadProducts();
         setNotice('Product updated successfully!');
       } else {
         setNotice('Saving product...');
+
         const { error } = await supabase.from('products').insert({
           name: newProduct.name.trim(),
           description: newProduct.description,
@@ -873,7 +902,9 @@ export default function App() {
           image_url: imageUrl,
           active: true
         });
+
         if (error) throw error;
+
         resetProductForm();
         await loadProducts();
         setNotice('Product added successfully!');
@@ -887,16 +918,21 @@ export default function App() {
 
   async function updateOrder(id, status) {
     if (!supabase) return;
+
     setLoading(true);
     setNotice('');
+
     try {
       const { data, error } = await supabase.rpc(
         'update_order_status_with_stock',
         { p_order_id: id, p_status: status }
       );
+
       if (error) throw error;
       if (!data?.success) throw new Error('Could not update order status.');
+
       await loadOrders();
+
       if (status === 'Cancelled') {
         await loadProducts();
         setNotice('Order cancelled successfully! Product stock has been restored.');
@@ -914,10 +950,12 @@ export default function App() {
   async function updateStock(id, stock) {
     const value = Number(stock);
     if (!Number.isInteger(value) || value < 0) return;
+
     const { error } = await supabase
       .from('products')
       .update({ stock: value })
       .eq('id', id);
+
     if (error) setNotice(error.message);
     else {
       await loadProducts();
@@ -927,10 +965,12 @@ export default function App() {
 
   async function deactivateProduct(id) {
     if (!confirm('Remove this product from the customer shop?')) return;
+
     const { error } = await supabase
       .from('products')
       .update({ active: false })
       .eq('id', id);
+
     if (error) setNotice(error.message);
     else {
       setNotice('Product removed');
@@ -942,17 +982,22 @@ export default function App() {
     const selected = products.find(
       p => String(p.id) === String(manualProductId)
     );
+
     if (!selected) {
       setNotice('Please select a product.');
       return;
     }
+
     const qty = Number(manualQty);
+
     if (!qty || qty < 1 || !Number.isInteger(qty)) {
       setNotice('Please enter a valid whole-number quantity.');
       return;
     }
+
     const existing = manualItems.find(x => x.id === selected.id);
     const alreadyAdded = existing ? existing.qty : 0;
+
     if (alreadyAdded + qty > Number(selected.stock)) {
       setNotice(`Only ${selected.stock} units available for ${selected.name}.`);
       return;
@@ -977,6 +1022,7 @@ export default function App() {
         }
       ]);
     }
+
     setManualProductId('');
     setManualQty(1);
     setNotice('Product added to new order.');
@@ -988,10 +1034,12 @@ export default function App() {
 
   async function createManualOrder(e) {
     e.preventDefault();
+
     if (!supabase) {
       setNotice('Supabase is not connected.');
       return;
     }
+
     if (manualItems.length === 0) {
       setNotice('Please add at least one product.');
       return;
@@ -999,6 +1047,7 @@ export default function App() {
 
     setLoading(true);
     setNotice('');
+
     try {
       const rows = manualItems.map(p => ({
         product_id: p.id,
@@ -1038,11 +1087,14 @@ export default function App() {
         name: '', phone: '', address: '',
         delivery: 'post', payment: 'cod', note: ''
       });
+
       setManualItems([]);
       setManualProductId('');
       setManualQty(1);
+
       await loadProducts();
       await loadOrders();
+
       setAdminTab('orders');
       setNotice(
         `New order created successfully! Order number: ${order.id.slice(0, 8).toUpperCase()}. Stock updated successfully.`
@@ -1067,30 +1119,48 @@ export default function App() {
 
   function stockBadge(stock) {
     const value = Number(stock);
+
     if (value <= 0) {
       return (
         <span style={{
-          display: 'inline-block', background: '#fee2e2', color: '#b91c1c',
-          padding: '4px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 800
+          display: 'inline-block',
+          background: '#fee2e2',
+          color: '#b91c1c',
+          padding: '4px 9px',
+          borderRadius: '20px',
+          fontSize: '11px',
+          fontWeight: 800
         }}>
           OUT OF STOCK
         </span>
       );
     }
+
     if (value <= LOW_STOCK_LIMIT) {
       return (
         <span style={{
-          display: 'inline-block', background: '#fef3c7', color: '#92400e',
-          padding: '4px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 800
+          display: 'inline-block',
+          background: '#fef3c7',
+          color: '#92400e',
+          padding: '4px 9px',
+          borderRadius: '20px',
+          fontSize: '11px',
+          fontWeight: 800
         }}>
           LOW STOCK
         </span>
       );
     }
+
     return (
       <span style={{
-        display: 'inline-block', background: '#dcfce7', color: '#166534',
-        padding: '4px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 800
+        display: 'inline-block',
+        background: '#dcfce7',
+        color: '#166534',
+        padding: '4px 9px',
+        borderRadius: '20px',
+        fontSize: '11px',
+        fontWeight: 800
       }}>
         IN STOCK
       </span>
@@ -1122,15 +1192,18 @@ export default function App() {
           >
             <Store size={17} /> Shop
           </button>
+
           <button className="nav cartnav" onClick={() => setShowCheckout(true)}>
             <ShoppingCart size={17} /> Cart <i>{cartCount}</i>
           </button>
+
           <button
             className={tab === 'tracking' ? 'nav active' : 'nav'}
             onClick={() => { navigateTo('tracking'); setNotice(''); }}
           >
             <Search size={17} /> Track Order
           </button>
+
           <button
             className={tab === 'dashboard' ? 'nav active' : 'nav'}
             onClick={() => navigateTo('dashboard')}
@@ -1172,60 +1245,13 @@ export default function App() {
             </div>
           </section>
 
-          {/* CUSTOMER DISCOUNT BANNER */}
-          {activeDiscount && (
-            <section
-              className="discount-banner"
-              style={{
-                margin: '24px auto',
-                padding: 'clamp(18px, 4vw, 28px) 16px',
-                width: 'calc(100% - 32px)',
-                maxWidth: '1100px',
-                boxSizing: 'border-box',
-                borderRadius: '16px',
-                background: 'linear-gradient(135deg, #8f3d62, #d77b9d)',
-                color: '#fff',
-                textAlign: 'center',
-                boxShadow: '0 8px 24px rgba(143, 61, 98, 0.18)',
-                overflowWrap: 'anywhere'
-              }}
-            >
-              <div style={{ fontSize: '30px', marginBottom: '8px' }}>🎉</div>
-              <h2 style={{
-                margin: '0 0 8px',
-                fontSize: 'clamp(20px, 4vw, 28px)',
-                lineHeight: 1.3
-              }}>
-                {activeDiscount.name}
-              </h2>
-              <p style={{
-                margin: 0,
-                fontSize: 'clamp(18px, 4vw, 24px)',
-                fontWeight: 800
-              }}>
-                {activeDiscount.discount_type === 'percentage'
-                  ? `${activeDiscount.discount_value}% OFF`
-                  : `${money(activeDiscount.discount_value)} OFF`}
-              </p>
-              <small style={{
-                display: 'block',
-                marginTop: '9px',
-                color: '#fff',
-                fontSize: 'clamp(12px, 2.5vw, 14px)'
-              }}>
-                {activeDiscount.product_id
-                  ? `Special offer on ${products.find(p => String(p.id) === String(activeDiscount.product_id))?.name || 'selected product'}`
-                  : 'Special offer on all products'}
-              </small>
-            </section>
-          )}
-
           <section className="section" id="products">
             <div className="sectionhead">
               <div>
                 <span className="eyebrow">OUR COLLECTION</span>
                 <h2>Shop our products</h2>
               </div>
+
               <label className="search">
                 <Search size={17} />
                 <input
@@ -1258,7 +1284,23 @@ export default function App() {
                         {stockBadge(p.stock)}
                       </div>
                       <div className="productfoot">
-                        <b>{money(p.price)}</b>
+                        {(() => {
+                          const offer = getDiscountForProduct(p.id);
+                          const offerItem = offer ? {
+                            price: Number(p.price),
+                            qty: 1,
+                            discount_type: offer.discount_type,
+                            discount_value: Number(offer.discount_value || 0)
+                          } : null;
+                          const offerAmount = offerItem ? calculateLineDiscount(offerItem) : 0;
+                          const offerPrice = Math.max(0, Number(p.price) - offerAmount);
+                          return offerAmount > 0 ? (
+                            <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <small style={{ color: '#777', textDecoration: 'line-through', fontSize: '0.82rem' }}>{money(p.price)}</small>
+                              <b style={{ color: '#16a34a', fontSize: '1.05rem' }}>{money(offerPrice)}</b>
+                            </span>
+                          ) : <b>{money(p.price)}</b>;
+                        })()}
                         <button
                           className="add"
                           disabled={p.stock < 1}
@@ -1408,16 +1450,19 @@ export default function App() {
                   <b>{money(totalSales)}</b>
                   <small>Excluding cancelled orders</small>
                 </div>
+
                 <div>
                   <small><CalendarDays size={14} /> Today's Orders</small>
                   <b>{todayOrders.length}</b>
                   <small>Orders received today</small>
                 </div>
+
                 <div>
                   <small><Clock size={14} /> Pending Orders</small>
                   <b>{pendingOrders.length}</b>
                   <small>Awaiting completion</small>
                 </div>
+
                 <div>
                   <small><CheckCircle size={14} /> Delivered Orders</small>
                   <b>{deliveredOrders.length}</b>
@@ -1426,16 +1471,29 @@ export default function App() {
               </div>
 
               <div className="stats">
-                <div><small>Products</small><b>{products.length}</b></div>
-                <div><small>Orders</small><b>{orders.length}</b></div>
-                <div><small>New orders</small><b>{orders.filter(o => o.status === 'New').length}</b></div>
+                <div>
+                  <small>Products</small>
+                  <b>{products.length}</b>
+                </div>
+                <div>
+                  <small>Orders</small>
+                  <b>{orders.length}</b>
+                </div>
+                <div>
+                  <small>New orders</small>
+                  <b>{orders.filter(o => o.status === 'New').length}</b>
+                </div>
                 <div>
                   <small>Low stock</small>
-                  <b style={{ color: lowStockCount > 0 ? '#b45309' : 'inherit' }}>{lowStockCount}</b>
+                  <b style={{ color: lowStockCount > 0 ? '#b45309' : 'inherit' }}>
+                    {lowStockCount}
+                  </b>
                 </div>
                 <div>
                   <small>Out of stock</small>
-                  <b style={{ color: outOfStockCount > 0 ? '#dc2626' : 'inherit' }}>{outOfStockCount}</b>
+                  <b style={{ color: outOfStockCount > 0 ? '#dc2626' : 'inherit' }}>
+                    {outOfStockCount}
+                  </b>
                 </div>
               </div>
 
@@ -1443,33 +1501,58 @@ export default function App() {
                 className="admin-menu"
                 style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', margin: '25px 0' }}
               >
-                <button className={adminTab === 'products' ? 'primary' : 'secondary'} onClick={() => setAdminTab('products')}>
+                <button
+                  className={adminTab === 'products' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('products')}
+                >
                   <Package size={16} /> Products
                 </button>
-                <button className={adminTab === 'orders' ? 'primary' : 'secondary'} onClick={() => setAdminTab('orders')}>
+                <button
+                  className={adminTab === 'orders' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('orders')}
+                >
                   <ClipboardList size={16} /> Orders
                 </button>
-                <button className={adminTab === 'neworder' ? 'primary' : 'secondary'} onClick={() => setAdminTab('neworder')}>
+                <button
+                  className={adminTab === 'neworder' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('neworder')}
+                >
                   <Plus size={16} /> New Order
                 </button>
-                <button className={adminTab === 'settings' ? 'primary' : 'secondary'} onClick={() => setAdminTab('settings')}>
+                <button
+                  className={adminTab === 'settings' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('settings')}
+                >
                   Change Password
                 </button>
-                <button className={adminTab === 'lowstock' ? 'primary' : 'secondary'} onClick={() => setAdminTab('lowstock')}>
+                <button
+                  className={adminTab === 'lowstock' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('lowstock')}
+                >
                   <AlertTriangle size={16} /> Stock Alerts
                   {lowStockCount + outOfStockCount > 0 && (
                     <span style={{
-                      marginLeft: '5px', background: '#dc2626', color: 'white',
-                      borderRadius: '20px', padding: '2px 7px', fontSize: '11px'
+                      marginLeft: '5px',
+                      background: '#dc2626',
+                      color: 'white',
+                      borderRadius: '20px',
+                      padding: '2px 7px',
+                      fontSize: '11px'
                     }}>
                       {lowStockCount + outOfStockCount}
                     </span>
                   )}
                 </button>
-                <button className={adminTab === 'discounts' ? 'primary' : 'secondary'} onClick={() => setAdminTab('discounts')}>
+                <button
+                  className={adminTab === 'discounts' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('discounts')}
+                >
                   <TrendingUp size={16} /> Discounts
                 </button>
-                <button className={adminTab === 'reports' ? 'primary' : 'secondary'} onClick={() => setAdminTab('reports')}>
+                <button
+                  className={adminTab === 'reports' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('reports')}
+                >
                   <TrendingUp size={16} /> Sales & Profit Reports
                 </button>
               </div>
@@ -1490,7 +1573,10 @@ export default function App() {
               {adminTab === 'lowstock' && (
                 <div className="panel">
                   <h3><AlertTriangle size={18} /> Stock alerts</h3>
-                  <p className="muted">Products with 2 or fewer units remaining are shown here.</p>
+                  <p className="muted">
+                    Products with 2 or fewer units remaining are shown here.
+                  </p>
+
                   {lowStockProducts.length === 0 && outOfStockProducts.length === 0 ? (
                     <div className="empty">
                       <Package size={32} />
@@ -1507,17 +1593,36 @@ export default function App() {
                           {outOfStockProducts.map(p => (
                             <div className="manage-row" key={p.id}>
                               {p.image_url ? (
-                                <img src={p.image_url} alt={p.name} style={{ width: '55px', height: '55px', objectFit: 'cover', borderRadius: '8px' }} />
+                                <img
+                                  src={p.image_url}
+                                  alt={p.name}
+                                  style={{
+                                    width: '55px',
+                                    height: '55px',
+                                    objectFit: 'cover',
+                                    borderRadius: '8px'
+                                  }}
+                                />
                               ) : <ImagePlus size={25} />}
-                              <span style={{ flex: 1 }}><b>{p.name}</b><small>{money(p.price)}</small></span>
+                              <span style={{ flex: 1 }}>
+                                <b>{p.name}</b>
+                                <small>{money(p.price)}</small>
+                              </span>
                               {stockBadge(p.stock)}
-                              <button className="secondary" onClick={() => { setAdminTab('products'); startEditProduct(p); }}>
+                              <button
+                                className="secondary"
+                                onClick={() => {
+                                  setAdminTab('products');
+                                  startEditProduct(p);
+                                }}
+                              >
                                 <Edit2 size={16} /> Edit
                               </button>
                             </div>
                           ))}
                         </>
                       )}
+
                       {lowStockProducts.length > 0 && (
                         <>
                           <h3 style={{ color: '#92400e', marginTop: '25px' }}>
@@ -1526,11 +1631,29 @@ export default function App() {
                           {lowStockProducts.map(p => (
                             <div className="manage-row" key={p.id}>
                               {p.image_url ? (
-                                <img src={p.image_url} alt={p.name} style={{ width: '55px', height: '55px', objectFit: 'cover', borderRadius: '8px' }} />
+                                <img
+                                  src={p.image_url}
+                                  alt={p.name}
+                                  style={{
+                                    width: '55px',
+                                    height: '55px',
+                                    objectFit: 'cover',
+                                    borderRadius: '8px'
+                                  }}
+                                />
                               ) : <ImagePlus size={25} />}
-                              <span style={{ flex: 1 }}><b>{p.name}</b><small>{money(p.price)}</small></span>
+                              <span style={{ flex: 1 }}>
+                                <b>{p.name}</b>
+                                <small>{money(p.price)}</small>
+                              </span>
                               {stockBadge(p.stock)}
-                              <button className="secondary" onClick={() => { setAdminTab('products'); startEditProduct(p); }}>
+                              <button
+                                className="secondary"
+                                onClick={() => {
+                                  setAdminTab('products');
+                                  startEditProduct(p);
+                                }}
+                              >
                                 <Edit2 size={16} /> Edit
                               </button>
                             </div>
@@ -1549,34 +1672,104 @@ export default function App() {
                       {editingProduct ? <Edit2 size={18} /> : <Plus size={18} />}
                       {editingProduct ? ' Edit product' : ' Add a product'}
                     </h3>
-                    {editingProduct && <p className="muted">Editing product: <b>{editingProduct.name}</b></p>}
+
+                    {editingProduct && (
+                      <p className="muted">
+                        Editing product: <b>{editingProduct.name}</b>
+                      </p>
+                    )}
 
                     <form className="productform" onSubmit={addProduct}>
-                      <input required placeholder="Product name" value={newProduct.name} onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} />
-                      <input placeholder="Description" value={newProduct.description} onChange={e => setNewProduct({ ...newProduct, description: e.target.value })} />
-                      <input required type="number" min="0" placeholder="Price (Rs.)" value={newProduct.price} onChange={e => setNewProduct({ ...newProduct, price: e.target.value })} />
-                      <input required type="number" min="0" step="0.01" placeholder="Cost Price / Purchase Price (Rs.)" value={newProduct.cost_price} onChange={e => setNewProduct({ ...newProduct, cost_price: e.target.value })} />
-                      <input required type="number" min="0" step="1" placeholder="Stock quantity" value={newProduct.stock} onChange={e => setNewProduct({ ...newProduct, stock: e.target.value })} />
+                      <input
+                        required
+                        placeholder="Product name"
+                        value={newProduct.name}
+                        onChange={e => setNewProduct({ ...newProduct, name: e.target.value })}
+                      />
 
-                      <label style={{
-                        display: 'flex', flexDirection: 'column', gap: '8px',
-                        padding: '12px', border: '1px dashed #c9a6b5', borderRadius: '10px'
-                      }}>
+                      <input
+                        placeholder="Description"
+                        value={newProduct.description}
+                        onChange={e => setNewProduct({ ...newProduct, description: e.target.value })}
+                      />
+
+                      <input
+                        required
+                        type="number"
+                        min="0"
+                        placeholder="Price (Rs.)"
+                        value={newProduct.price}
+                        onChange={e => setNewProduct({ ...newProduct, price: e.target.value })}
+                      />
+
+                      <input
+                        required
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Cost Price / Purchase Price (Rs.)"
+                        value={newProduct.cost_price}
+                        onChange={e => setNewProduct({ ...newProduct, cost_price: e.target.value })}
+                      />
+
+                      <input
+                        required
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="Stock quantity"
+                        value={newProduct.stock}
+                        onChange={e => setNewProduct({ ...newProduct, stock: e.target.value })}
+                      />
+
+                      <label
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                          padding: '12px',
+                          border: '1px dashed #c9a6b5',
+                          borderRadius: '10px'
+                        }}
+                      >
                         <span>
                           <ImagePlus size={18} style={{ verticalAlign: 'middle', marginRight: '7px' }} />
                           {editingProduct ? 'Change product photo (optional)' : 'Product photo'}
                         </span>
-                        <input id="product-image-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={handleImageSelect} />
+
+                        <input
+                          id="product-image-input"
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={handleImageSelect}
+                        />
+
                         <small>JPG, PNG or WEBP · Maximum 5 MB</small>
-                        {editingProduct?.image_url && !selectedImage && <small>You can keep the existing photo without changing it.</small>}
-                        {selectedImage && <small style={{ color: 'green' }}>Selected: {selectedImage.name}</small>}
+
+                        {editingProduct?.image_url && !selectedImage && (
+                          <small>You can keep the existing photo without changing it.</small>
+                        )}
+
+                        {selectedImage && (
+                          <small style={{ color: 'green' }}>
+                            Selected: {selectedImage.name}
+                          </small>
+                        )}
                       </label>
 
                       <button className="primary" disabled={loading}>
-                        {loading ? 'Saving...' : editingProduct ? 'Update product' : 'Save product'}
+                        {loading
+                          ? 'Saving...'
+                          : editingProduct ? 'Update product' : 'Save product'}
                       </button>
+
                       {editingProduct && (
-                        <button type="button" className="secondary" onClick={resetProductForm} disabled={loading}>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={resetProductForm}
+                          disabled={loading}
+                        >
                           <X size={16} /> Cancel editing
                         </button>
                       )}
@@ -1585,19 +1778,39 @@ export default function App() {
 
                   <div className="panel">
                     <h3><Package size={18} /> Products & stock</h3>
+
                     {products.length === 0 ? (
                       <p className="muted">No products yet.</p>
                     ) : (
                       products.map(p => (
-                        <div className="manage-row" key={p.id} style={{ gap: '12px', alignItems: 'center' }}>
+                        <div
+                          className="manage-row"
+                          key={p.id}
+                          style={{ gap: '12px', alignItems: 'center' }}
+                        >
                           {p.image_url ? (
-                            <img src={p.image_url} alt={p.name} style={{ width: '55px', height: '55px', objectFit: 'cover', borderRadius: '8px' }} />
-                          ) : <ImagePlus size={25} />}
+                            <img
+                              src={p.image_url}
+                              alt={p.name}
+                              style={{
+                                width: '55px',
+                                height: '55px',
+                                objectFit: 'cover',
+                                borderRadius: '8px'
+                              }}
+                            />
+                          ) : (
+                            <ImagePlus size={25} />
+                          )}
+
                           <span style={{ flex: 1 }}>
                             <b>{p.name}</b>
                             <small>Selling: {money(p.price)} · Cost: {money(p.cost_price)}</small>
-                            <div style={{ marginTop: '5px' }}>{stockBadge(p.stock)}</div>
+                            <div style={{ marginTop: '5px' }}>
+                              {stockBadge(p.stock)}
+                            </div>
                           </span>
+
                           <label>
                             Stock
                             <input
@@ -1606,15 +1819,31 @@ export default function App() {
                               value={p.stock}
                               onChange={e => {
                                 const value = e.target.value;
-                                setProducts(old => old.map(item => item.id === p.id ? { ...item, stock: value } : item));
+                                setProducts(old =>
+                                  old.map(item =>
+                                    item.id === p.id ? { ...item, stock: value } : item
+                                  )
+                                );
                               }}
                               onBlur={e => updateStock(p.id, e.target.value)}
                             />
                           </label>
-                          <button className="secondary" type="button" onClick={() => startEditProduct(p)} title="Edit product">
+
+                          <button
+                            className="secondary"
+                            type="button"
+                            onClick={() => startEditProduct(p)}
+                            title="Edit product"
+                          >
                             <Edit2 size={16} /> Edit
                           </button>
-                          <button className="textdanger" onClick={() => deactivateProduct(p.id)}>Remove</button>
+
+                          <button
+                            className="textdanger"
+                            onClick={() => deactivateProduct(p.id)}
+                          >
+                            Remove
+                          </button>
                         </div>
                       ))
                     )}
@@ -1633,41 +1862,18 @@ export default function App() {
                       {products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
                     </select>
                     <select value={discountForm.discount_type} onChange={e => setDiscountForm({ ...discountForm, discount_type: e.target.value })}>
-                      <option value="percentage">Percentage (%)</option>
-                      <option value="fixed">Fixed amount (Rs.)</option>
+                      <option value="percentage">Percentage (%)</option><option value="fixed">Fixed amount (Rs.)</option>
                     </select>
                     <input required type="number" min="0.01" step="0.01" placeholder={discountForm.discount_type === 'percentage' ? 'Discount percentage' : 'Discount amount (Rs.)'} value={discountForm.discount_value} onChange={e => setDiscountForm({ ...discountForm, discount_value: e.target.value })} />
                     <button className="primary" disabled={loading}>{editingDiscount ? 'Update discount' : 'Save discount'}</button>
-                    {editingDiscount && (
-                      <button type="button" className="secondary" onClick={() => {
-                        setEditingDiscount(null);
-                        setDiscountForm({ name: '', product_id: '', discount_type: 'percentage', discount_value: '' });
-                      }}>
-                        Cancel edit
-                      </button>
-                    )}
+                    {editingDiscount && <button type="button" className="secondary" onClick={() => { setEditingDiscount(null); setDiscountForm({ name: '', product_id: '', discount_type: 'percentage', discount_value: '' }); }}>Cancel edit</button>}
                   </form>
-
                   {discounts.length === 0 ? <p className="muted">No discounts created yet.</p> : discounts.map(d => (
                     <div className="manage-row" key={d.id}>
-                      <span style={{ flex: 1 }}>
-                        <b>{d.name}</b>
-                        <small>
-                          {d.product_id ? `Product: ${products.find(p => String(p.id) === String(d.product_id))?.name || 'Selected product'} · ` : 'All Products · '}
-                          {d.discount_type === 'percentage' ? `${d.discount_value}% off` : `${money(d.discount_value)} off`}
-                        </small>
-                      </span>
+                      <span style={{ flex: 1 }}><b>{d.name}</b><small>{d.product_id ? `Product: ${products.find(p => String(p.id) === String(d.product_id))?.name || 'Selected product'} · ` : 'All Products · '}{d.discount_type === 'percentage' ? `${d.discount_value}% off` : `${money(d.discount_value)} off`}</small></span>
                       <b style={{ color: d.active ? '#15803d' : '#777' }}>{d.active ? 'ACTIVE' : 'OFF'}</b>
                       <button type="button" className="secondary" disabled={loading} onClick={() => toggleDiscount(d)}>{d.active ? 'Turn off' : 'Activate'}</button>
-                      <button type="button" className="secondary" onClick={() => {
-                        setEditingDiscount(d);
-                        setDiscountForm({
-                          name: d.name || '',
-                          product_id: d.product_id || '',
-                          discount_type: d.discount_type || 'percentage',
-                          discount_value: String(d.discount_value ?? '')
-                        });
-                      }}>Edit</button>
+                      <button type="button" className="secondary" onClick={() => { setEditingDiscount(d); setDiscountForm({ name: d.name || '', product_id: d.product_id || '', discount_type: d.discount_type || 'percentage', discount_value: String(d.discount_value ?? '') }); }}>Edit</button>
                       <button type="button" className="textdanger" onClick={() => deleteDiscount(d.id)}>Delete</button>
                     </div>
                   ))}
@@ -1682,11 +1888,28 @@ export default function App() {
                   </p>
 
                   <div className="stats">
-                    <div><small>Net Sales (After Discounts)</small><b>{money(netSales)}</b></div>
-                    <div><small>Total Discounts</small><b style={{ color: '#15803d' }}>-{money(totalDiscounts)}</b></div>
-                    <div><small>Total Product Cost</small><b>{money(totalProductCost)}</b></div>
-                    <div><small>Actual Profit</small><b style={{ color: actualProfit >= 0 ? '#15803d' : '#dc2626' }}>{money(actualProfit)}</b></div>
-                    <div><small>Included Orders</small><b>{reportOrders.length}</b></div>
+                    <div>
+                      <small>Net Sales (After Discounts)</small>
+                      <b>{money(netSales)}</b>
+                    </div>
+                    <div>
+                      <small>Total Discounts</small>
+                      <b style={{ color: '#15803d' }}>-{money(totalDiscounts)}</b>
+                    </div>
+                    <div>
+                      <small>Total Product Cost</small>
+                      <b>{money(totalProductCost)}</b>
+                    </div>
+                    <div>
+                      <small>Actual Profit</small>
+                      <b style={{ color: actualProfit >= 0 ? '#15803d' : '#dc2626' }}>
+                        {money(actualProfit)}
+                      </b>
+                    </div>
+                    <div>
+                      <small>Included Orders</small>
+                      <b>{reportOrders.length}</b>
+                    </div>
                   </div>
 
                   <p className="muted" style={{ marginTop: '12px' }}>
@@ -1752,6 +1975,7 @@ export default function App() {
               {adminTab === 'orders' && (
                 <div className="panel">
                   <h3><ClipboardList size={18} /> Customer orders</h3>
+
                   {orders.length === 0 ? (
                     <p className="muted">No orders yet.</p>
                   ) : (
@@ -1760,15 +1984,23 @@ export default function App() {
                         <div className="orderhead">
                           <b>#{o.id.slice(0, 8).toUpperCase()} · {o.customer_name}</b>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                            <button type="button" className="secondary" onClick={() => openOrderWhatsApp(o)}>WhatsApp Customer</button>
-                            <button type="button" className="secondary" onClick={() => printOrderReceipt(o)}>Print / Save PDF</button>
-                            <select value={o.status} disabled={loading || o.status === 'Cancelled'} onChange={e => updateOrder(o.id, e.target.value)}>
-                              <option>New</option>
-                              <option>Accepted</option>
-                              <option>Packed</option>
-                              <option>Dispatched</option>
-                              <option>Delivered</option>
-                              <option>Cancelled</option>
+                            <button type="button" className="secondary" onClick={() => openOrderWhatsApp(o)}>
+                              WhatsApp Customer
+                            </button>
+                            <button type="button" className="secondary" onClick={() => printOrderReceipt(o)}>
+                              Print / Save PDF
+                            </button>
+                            <select
+                            value={o.status}
+                            disabled={loading || o.status === 'Cancelled'}
+                            onChange={e => updateOrder(o.id, e.target.value)}
+                          >
+                            <option>New</option>
+                            <option>Accepted</option>
+                            <option>Packed</option>
+                            <option>Dispatched</option>
+                            <option>Delivered</option>
+                            <option>Cancelled</option>
                             </select>
                           </div>
                         </div>
@@ -1811,18 +2043,39 @@ export default function App() {
               {adminTab === 'neworder' && (
                 <div className="panel">
                   <h3><Plus size={18} /> Create a new customer order</h3>
+
                   <form className="checkout" onSubmit={createManualOrder}>
                     <h3>Customer details</h3>
-                    <input required placeholder="Customer full name" value={manualForm.name} onChange={e => setManualForm({ ...manualForm, name: e.target.value })} />
-                    <input required placeholder="Customer phone number" value={manualForm.phone} onChange={e => setManualForm({ ...manualForm, phone: e.target.value })} />
-                    <textarea required placeholder="Customer delivery address" value={manualForm.address} onChange={e => setManualForm({ ...manualForm, address: e.target.value })} />
+
+                    <input
+                      required
+                      placeholder="Customer full name"
+                      value={manualForm.name}
+                      onChange={e => setManualForm({ ...manualForm, name: e.target.value })}
+                    />
+                    <input
+                      required
+                      placeholder="Customer phone number"
+                      value={manualForm.phone}
+                      onChange={e => setManualForm({ ...manualForm, phone: e.target.value })}
+                    />
+                    <textarea
+                      required
+                      placeholder="Customer delivery address"
+                      value={manualForm.address}
+                      onChange={e => setManualForm({ ...manualForm, address: e.target.value })}
+                    />
 
                     <h3>Select products</h3>
+
                     {products.length === 0 ? (
                       <p className="muted">No active products available. Please add products first.</p>
                     ) : (
                       <>
-                        <select value={manualProductId} onChange={e => setManualProductId(e.target.value)}>
+                        <select
+                          value={manualProductId}
+                          onChange={e => setManualProductId(e.target.value)}
+                        >
                           <option value="">-- Select a product --</option>
                           {products.map(p => (
                             <option key={p.id} value={p.id} disabled={Number(p.stock) < 1}>
@@ -1830,8 +2083,16 @@ export default function App() {
                             </option>
                           ))}
                         </select>
+
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                          <input type="number" min="1" step="1" value={manualQty} onChange={e => setManualQty(e.target.value)} style={{ maxWidth: '120px' }} />
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={manualQty}
+                            onChange={e => setManualQty(e.target.value)}
+                            style={{ maxWidth: '120px' }}
+                          />
                           <button type="button" className="secondary" onClick={addManualItem}>
                             <Plus size={16} /> Add product
                           </button>
@@ -1876,12 +2137,22 @@ export default function App() {
                     <h3>Delivery method</h3>
                     <div className="choices">
                       <label>
-                        <input type="radio" name="manualDelivery" checked={manualForm.delivery === 'post'} onChange={() => setManualForm({ ...manualForm, delivery: 'post' })} />
+                        <input
+                          type="radio"
+                          name="manualDelivery"
+                          checked={manualForm.delivery === 'post'}
+                          onChange={() => setManualForm({ ...manualForm, delivery: 'post' })}
+                        />
                         <Mail />
                         <span>Post Office<small>Rs. 250</small></span>
                       </label>
                       <label>
-                        <input type="radio" name="manualDelivery" checked={manualForm.delivery === 'courier'} onChange={() => setManualForm({ ...manualForm, delivery: 'courier' })} />
+                        <input
+                          type="radio"
+                          name="manualDelivery"
+                          checked={manualForm.delivery === 'courier'}
+                          onChange={() => setManualForm({ ...manualForm, delivery: 'courier' })}
+                        />
                         <Truck />
                         <span>Courier<small>Rs. 500</small></span>
                       </label>
@@ -1890,27 +2161,42 @@ export default function App() {
                     <h3>Payment method</h3>
                     <div className="choices">
                       <label>
-                        <input type="radio" name="manualPayment" checked={manualForm.payment === 'cod'} onChange={() => setManualForm({ ...manualForm, payment: 'cod' })} />
+                        <input
+                          type="radio"
+                          name="manualPayment"
+                          checked={manualForm.payment === 'cod'}
+                          onChange={() => setManualForm({ ...manualForm, payment: 'cod' })}
+                        />
                         <Banknote />
                         <span>Cash on Delivery<small>Pay when it arrives</small></span>
                       </label>
                       <label>
-                        <input type="radio" name="manualPayment" checked={manualForm.payment === 'bank'} onChange={() => setManualForm({ ...manualForm, payment: 'bank' })} />
+                        <input
+                          type="radio"
+                          name="manualPayment"
+                          checked={manualForm.payment === 'bank'}
+                          onChange={() => setManualForm({ ...manualForm, payment: 'bank' })}
+                        />
                         <CreditCard />
                         <span>Bank Transfer<small>Transfer and share proof with the shop</small></span>
                       </label>
                     </div>
 
                     <h3>Additional note</h3>
-                    <textarea placeholder="Optional note" value={manualForm.note} onChange={e => setManualForm({ ...manualForm, note: e.target.value })} />
+                    <textarea
+                      placeholder="Optional note"
+                      value={manualForm.note}
+                      onChange={e => setManualForm({ ...manualForm, note: e.target.value })}
+                    />
 
                     <div className="totals">
                       <span>Items</span><b>{money(manualSubtotal)}</b>
-                      {manualDiscountAmount > 0 && <><span>Item discounts</span><b style={{ color: '#15803d' }}>-{money(manualDiscountAmount)}</b></>}
+                      {manualDiscountAmount > 0 && <><span>{'Item discounts'}</span><b style={{ color: '#15803d' }}>-{money(manualDiscountAmount)}</b></>}
                       <span>{manualForm.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
                       <b>{money(manualDeliveryFee)}</b>
                       <strong>Total</strong><strong>{money(manualTotal)}</strong>
                     </div>
+
                     <button className="primary full" disabled={loading || manualItems.length === 0}>
                       {loading ? 'Creating order...' : 'Create Order'}
                     </button>
@@ -1938,50 +2224,60 @@ export default function App() {
             ) : (
               <>
                 <div className="cartitems">
-                  {activeDiscount && (
-                    <button type="button" className="secondary" onClick={applyActiveDiscountToCart}>
-                      Apply "{activeDiscount.name}" to {activeDiscount.product_id ? 'selected product' : 'all items'}
-                    </button>
-                  )}
-                  {cart.map(p => {
-                    const gross = Number(p.price) * p.qty;
-                    const itemDiscount = calculateLineDiscount(p);
-                    return (
-                      <div className="cartitem" key={p.id} style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                        <span style={{ flex: '1 1 150px' }}>
-                          <b>{p.name}</b>
-                          <small>{money(p.price)} each</small>
-                          <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
-                            <select aria-label={`${p.name} discount type`} value={p.discount_type || ''} onChange={e => updateCartDiscount(p.id, 'discount_type', e.target.value || null)}>
-                              <option value="">No discount</option>
-                              <option value="percentage">Percentage (%)</option>
-                              <option value="fixed">Fixed per item (Rs.)</option>
-                            </select>
-                            <input aria-label={`${p.name} discount value`} type="number" min="0" step="0.01" placeholder="Discount value" value={p.discount_value ?? ''} disabled={!p.discount_type} onChange={e => updateCartDiscount(p.id, 'discount_value', e.target.value)} style={{ width: '125px' }} />
+                    {activeDiscount && (
+                      <button type="button" className="secondary" onClick={applyActiveDiscountToCart}>
+                        Apply "{activeDiscount.name}" to {activeDiscount.product_id ? 'selected product' : 'all items'}
+                      </button>
+                    )}
+                    {cart.map(p => {
+                      const gross = Number(p.price) * p.qty;
+                      const itemDiscount = calculateLineDiscount(p);
+                      return (
+                        <div className="cartitem" key={p.id} style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                          <span style={{ flex: '1 1 150px' }}>
+                            <b>{p.name}</b>
+                            <small>{money(p.price)} each</small>
+                            <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                              <select aria-label={`${p.name} discount type`} value={p.discount_type || ''} onChange={e => updateCartDiscount(p.id, 'discount_type', e.target.value || null)}>
+                                <option value="">No discount</option>
+                                <option value="percentage">Percentage (%)</option>
+                                <option value="fixed">Fixed per item (Rs.)</option>
+                              </select>
+                              <input aria-label={`${p.name} discount value`} type="number" min="0" step="0.01" placeholder="Discount value" value={p.discount_value ?? ''} disabled={!p.discount_type} onChange={e => updateCartDiscount(p.id, 'discount_value', e.target.value)} style={{ width: '125px' }} />
+                            </div>
+                            {itemDiscount > 0 && <small style={{ color: '#15803d' }}>Discount: -{money(itemDiscount)} · Net: {money(gross - itemDiscount)}</small>}
+                          </span>
+                          <div className="qty">
+                            <button onClick={() => changeQty(p.id, -1)}><Minus size={14} /></button>
+                            {p.qty}
+                            <button onClick={() => changeQty(p.id, 1)}><Plus size={14} /></button>
                           </div>
-                          {itemDiscount > 0 && <small style={{ color: '#15803d' }}>Discount: -{money(itemDiscount)} · Net: {money(gross - itemDiscount)}</small>}
-                        </span>
-                        <div className="qty">
-                          <button onClick={() => changeQty(p.id, -1)}><Minus size={14} /></button>
-                          {p.qty}
-                          <button onClick={() => changeQty(p.id, 1)}><Plus size={14} /></button>
+                          <b>{money(Math.max(0, gross - itemDiscount))}</b>
                         </div>
-                        <b>{money(Math.max(0, gross - itemDiscount))}</b>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                 </div>
 
                 <form className="checkout" onSubmit={placeOrder}>
                   <h3>Delivery method</h3>
                   <div className="choices">
                     <label>
-                      <input type="radio" name="delivery" checked={form.delivery === 'post'} onChange={() => setForm({ ...form, delivery: 'post' })} />
+                      <input
+                        type="radio"
+                        name="delivery"
+                        checked={form.delivery === 'post'}
+                        onChange={() => setForm({ ...form, delivery: 'post' })}
+                      />
                       <Mail />
                       <span>Post Office<small>Rs. 250</small></span>
                     </label>
                     <label>
-                      <input type="radio" name="delivery" checked={form.delivery === 'courier'} onChange={() => setForm({ ...form, delivery: 'courier' })} />
+                      <input
+                        type="radio"
+                        name="delivery"
+                        checked={form.delivery === 'courier'}
+                        onChange={() => setForm({ ...form, delivery: 'courier' })}
+                      />
                       <Truck />
                       <span>Courier<small>Rs. 500</small></span>
                     </label>
@@ -1990,26 +2286,55 @@ export default function App() {
                   <h3>Payment method</h3>
                   <div className="choices">
                     <label>
-                      <input type="radio" name="payment" checked={form.payment === 'cod'} onChange={() => setForm({ ...form, payment: 'cod' })} />
+                      <input
+                        type="radio"
+                        name="payment"
+                        checked={form.payment === 'cod'}
+                        onChange={() => setForm({ ...form, payment: 'cod' })}
+                      />
                       <Banknote />
                       <span>Cash on Delivery<small>Pay when it arrives</small></span>
                     </label>
                     <label>
-                      <input type="radio" name="payment" checked={form.payment === 'bank'} onChange={() => setForm({ ...form, payment: 'bank' })} />
+                      <input
+                        type="radio"
+                        name="payment"
+                        checked={form.payment === 'bank'}
+                        onChange={() => setForm({ ...form, payment: 'bank' })}
+                      />
                       <CreditCard />
                       <span>Bank Transfer<small>Transfer and share proof with the shop</small></span>
                     </label>
                   </div>
 
                   <h3>Your details</h3>
-                  <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-                  <input required placeholder="Phone number" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
-                  <textarea required placeholder="Delivery address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-                  <textarea placeholder="Note (optional)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} />
+                  <input
+                    required
+                    placeholder="Full name"
+                    value={form.name}
+                    onChange={e => setForm({ ...form, name: e.target.value })}
+                  />
+                  <input
+                    required
+                    placeholder="Phone number"
+                    value={form.phone}
+                    onChange={e => setForm({ ...form, phone: e.target.value })}
+                  />
+                  <textarea
+                    required
+                    placeholder="Delivery address"
+                    value={form.address}
+                    onChange={e => setForm({ ...form, address: e.target.value })}
+                  />
+                  <textarea
+                    placeholder="Note (optional)"
+                    value={form.note}
+                    onChange={e => setForm({ ...form, note: e.target.value })}
+                  />
 
                   <div className="totals">
                     <span>Items</span><b>{money(subtotal)}</b>
-                    {discountAmount > 0 && <><span>Item discounts</span><b style={{ color: '#15803d' }}>-{money(discountAmount)}</b></>}
+                    {discountAmount > 0 && <><span>{'Item discounts'}</span><b style={{ color: '#15803d' }}>-{money(discountAmount)}</b></>}
                     <span>{form.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
                     <b>{money(deliveryFee)}</b>
                     <strong>Total</strong><strong>{money(total)}</strong>
