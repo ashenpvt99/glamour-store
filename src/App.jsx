@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabase';
 import {
@@ -247,21 +246,27 @@ export default function App() {
     o => o.status === 'Delivered'
   );
 
-  // Sales and profit report calculations (cancelled orders are excluded).
+  // Sales and profit report calculations. Cancelled orders are excluded.
+  // Item line totals are gross product sales; discounts are subtracted once
+  // at order level. Delivery fees are excluded from product sales and profit.
   const reportOrders = orders.filter(o => o.status !== 'Cancelled');
   const reportItems = reportOrders.flatMap(o => o.order_items || []);
   const totalProductRevenue = reportItems.reduce(
     (sum, item) => sum + Number(item.line_total || 0), 0
   );
+  const totalDiscounts = reportOrders.reduce(
+    (sum, order) => sum + Math.max(0, Number(order.discount_amount || 0)), 0
+  );
+  const netSales = Math.max(0, totalProductRevenue - totalDiscounts);
   const totalProductCost = reportItems.reduce(
     (sum, item) => sum + Number(item.unit_cost || 0) * Number(item.quantity || 0), 0
   );
-  const estimatedProfit = totalProductRevenue - totalProductCost;
+  const actualProfit = netSales - totalProductCost;
   const itemsWithoutCost = reportItems.filter(item => Number(item.unit_cost || 0) <= 0).length;
 
   function colomboMonthParts(value) {
     const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Colombo', year: 'numeric', month: 'short'
+      timeZone: 'Asia/Colombo', year: 'numeric', month: 'short'
     }).formatToParts(new Date(value));
     const get = type => parts.find(part => part.type === type)?.value || '';
     return { key: `${get('year')}-${get('month')}`, label: `${get('month')} ${get('year')}` };
@@ -281,9 +286,10 @@ export default function App() {
       const month = colomboMonthParts(order.created_at);
       if (!totals.has(month.key)) return;
       const entry = totals.get(month.key);
-      entry.revenue += (order.order_items || []).reduce(
+      const grossOrderSales = (order.order_items || []).reduce(
         (sum, item) => sum + Number(item.line_total || 0), 0
       );
+      entry.revenue += Math.max(0, grossOrderSales - Math.max(0, Number(order.discount_amount || 0)));
       entry.orders += 1;
     });
     return Array.from(totals.values());
@@ -472,7 +478,8 @@ export default function App() {
         product_name: p.name,
         quantity: p.qty,
         unit_price: Number(p.price),
-        line_total: Number(p.price) * p.qty
+        line_total: Number(p.price) * p.qty,
+        unit_cost: Number(p.cost_price || 0)
       }));
 
       const order = await saveOrderWithStock(
@@ -934,6 +941,7 @@ export default function App() {
           id: selected.id,
           name: selected.name,
           price: Number(selected.price),
+          cost_price: Number(selected.cost_price || 0),
           stock: Number(selected.stock),
           qty
         }
@@ -971,7 +979,8 @@ export default function App() {
         product_name: p.name,
         quantity: p.qty,
         unit_price: Number(p.price),
-        line_total: Number(p.price) * p.qty
+        line_total: Number(p.price) * p.qty,
+        unit_cost: Number(p.cost_price || 0)
       }));
 
       const order = await saveOrderWithStock(
@@ -1217,7 +1226,6 @@ export default function App() {
         </main>
       )}
 
-
       {tab === 'tracking' && (
         <main className="section dashboard">
           <div className="loginbox">
@@ -1342,7 +1350,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* New Dashboard Summary Cards */}
               <div className="stats">
                 <div>
                   <small><TrendingUp size={14} /> Total Sales</small>
@@ -1369,7 +1376,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Existing Store Statistics */}
               <div className="stats">
                 <div>
                   <small>Products</small>
@@ -1780,22 +1786,26 @@ export default function App() {
                 <div className="panel">
                   <h3><TrendingUp size={18} /> Sales & Profit Reports</h3>
                   <p className="muted">
-                    Reports exclude cancelled orders. Revenue and cost below are for products only; delivery fees are not included.
+                    Reports exclude cancelled orders. Net sales are product sales after discounts. Product cost is deducted to calculate actual profit. Delivery fees are not included.
                   </p>
 
                   <div className="stats">
                     <div>
-                      <small>Total Product Sales</small>
-                      <b>{money(totalProductRevenue)}</b>
+                      <small>Net Sales (After Discounts)</small>
+                      <b>{money(netSales)}</b>
+                    </div>
+                    <div>
+                      <small>Total Discounts</small>
+                      <b style={{ color: '#15803d' }}>-{money(totalDiscounts)}</b>
                     </div>
                     <div>
                       <small>Total Product Cost</small>
                       <b>{money(totalProductCost)}</b>
                     </div>
                     <div>
-                      <small>Estimated Profit</small>
-                      <b style={{ color: estimatedProfit >= 0 ? '#15803d' : '#dc2626' }}>
-                        {money(estimatedProfit)}
+                      <small>Actual Profit</small>
+                      <b style={{ color: actualProfit >= 0 ? '#15803d' : '#dc2626' }}>
+                        {money(actualProfit)}
                       </b>
                     </div>
                     <div>
@@ -1804,6 +1814,10 @@ export default function App() {
                     </div>
                   </div>
 
+                  <p className="muted" style={{ marginTop: '12px' }}>
+                    Gross product sales before discounts: <b>{money(totalProductRevenue)}</b>
+                  </p>
+
                   {itemsWithoutCost > 0 && (
                     <div style={{
                       margin: '16px 0', padding: '12px 14px', borderRadius: '10px',
@@ -1811,12 +1825,12 @@ export default function App() {
                     }}>
                       <b>Cost price needs attention</b>
                       <p style={{ margin: '5px 0 0' }}>
-                        {itemsWithoutCost} order item(s) have a zero cost price. Profit may be overstated until their cost details are corrected. Older orders created before cost tracking usually appear here.
+                        {itemsWithoutCost} order item(s) have a zero cost price. Actual profit may be overstated until their cost details are corrected. Older orders created before cost tracking usually appear here.
                       </p>
                     </div>
                   )}
 
-                  <h3 style={{ marginTop: '28px' }}><CalendarDays size={18} /> Monthly Product Sales</h3>
+                  <h3 style={{ marginTop: '28px' }}><CalendarDays size={18} /> Monthly Net Sales</h3>
                   {monthlySales.map(month => (
                     <div key={month.key} style={{ margin: '14px 0' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '6px' }}>
@@ -1842,7 +1856,7 @@ export default function App() {
                           <tr>
                             <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Product</th>
                             <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Units sold</th>
-                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Product sales</th>
+                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Gross Product Sales</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2063,7 +2077,6 @@ export default function App() {
                     />
 
                     <div className="totals">
-                      <span>Items</span><b>{money(manualSubtotal)}</b>
                       <span>Items</span><b>{money(manualSubtotal)}</b>
                       {manualDiscountAmount > 0 && <><span>{activeDiscount?.name || 'Discount'}</span><b style={{ color: '#15803d' }}>-{money(manualDiscountAmount)}</b></>}
                       <span>{manualForm.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
