@@ -217,6 +217,30 @@ export default function App() {
   const [trackingPhone, setTrackingPhone] = useState('');
   const [trackingOrder, setTrackingOrder] = useState(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
+  const [copiedBankField, setCopiedBankField] = useState('');
+
+  const copyBankDetail = async (value, fieldKey) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(String(value));
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = String(value);
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (!copied) throw new Error('Copy command failed');
+      }
+      setCopiedBankField(fieldKey);
+      window.setTimeout(() => setCopiedBankField(current => current === fieldKey ? '' : current), 1800);
+    } catch (error) {
+      setNotice('Could not copy automatically. Please select and copy the detail.');
+    }
+  };
 
   const [form, setForm] = useState({
     name: '', phone: '', address: '',
@@ -2338,8 +2362,18 @@ export default function App() {
                       {BANK_ACCOUNTS.map((account, index) => (
                         <div key={account.bank} style={{ padding: '12px 0', borderTop: index ? '1px solid #eadde2' : 'none' }}>
                           <strong>{account.bank}</strong>
-                          <p style={{ margin: '6px 0' }}>Account Name: <b>{account.holder}</b></p>
-                          <p style={{ margin: '6px 0' }}>Account Number: <b>{account.account}</b></p>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', margin: '8px 0' }}>
+                            <span>Account Name: <b>{account.holder}</b></span>
+                            <button type="button" onClick={() => copyBankDetail(account.holder, `${index}-holder`)} style={{ border: '1px solid #d8aebb', borderRadius: '7px', padding: '6px 10px', background: '#fff', color: '#8b3f5b', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                              {copiedBankField === `${index}-holder` ? 'Copied!' : 'Copy Name'}
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', margin: '8px 0' }}>
+                            <span>Account Number: <b>{account.account}</b></span>
+                            <button type="button" onClick={() => copyBankDetail(account.account, `${index}-account`)} style={{ border: '1px solid #d8aebb', borderRadius: '7px', padding: '6px 10px', background: '#fff', color: '#8b3f5b', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                              {copiedBankField === `${index}-account` ? 'Copied!' : 'Copy Number'}
+                            </button>
+                          </div>
                           <p style={{ margin: '6px 0 0' }}>Branch: {account.branch}</p>
                         </div>
                       ))}
