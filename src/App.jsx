@@ -34,7 +34,11 @@ function formatOrderDateTime(value) {
     })
   };
 }
-const DELIVERY = { post: 250, courier: 500 };
+const DELIVERY = { post: 380, courier: 500 };
+const BANK_ACCOUNTS = [
+  { bank: 'Sampath Bank', holder: 'A.M.S.K ABEYSINHGHE', account: '116852125237', branch: 'Anuradhapura Branch' },
+  { bank: 'Bank of Ceylon (BOC)', holder: 'A.S.MUNASINHGE', account: '80259358', branch: 'Anuradhapura Branch' }
+];
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const LOW_STOCK_LIMIT = 2;
@@ -545,6 +549,12 @@ export default function App() {
   async function placeOrder(e) {
     e.preventDefault();
 
+    if (form.delivery === 'courier' && form.payment !== 'bank') {
+      setForm(old => ({ ...old, payment: 'bank' }));
+      setNotice('Courier delivery is available with Bank Transfer only.');
+      return;
+    }
+
     if (!supabase) {
       return setNotice('Please connect the free database first. See SETUP_GUIDE.txt.');
     }
@@ -1046,6 +1056,12 @@ export default function App() {
 
   async function createManualOrder(e) {
     e.preventDefault();
+
+    if (manualForm.delivery === 'courier' && manualForm.payment !== 'bank') {
+      setManualForm(old => ({ ...old, payment: 'bank' }));
+      setNotice('Courier delivery is available with Bank Transfer only.');
+      return;
+    }
 
     if (!supabase) {
       setNotice('Supabase is not connected.');
@@ -2156,14 +2172,14 @@ export default function App() {
                           onChange={() => setManualForm({ ...manualForm, delivery: 'post' })}
                         />
                         <Mail />
-                        <span>Post Office<small>Rs. 250</small></span>
+                        <span>Post Office<small>Rs. 380</small></span>
                       </label>
                       <label>
                         <input
                           type="radio"
                           name="manualDelivery"
                           checked={manualForm.delivery === 'courier'}
-                          onChange={() => setManualForm({ ...manualForm, delivery: 'courier' })}
+                          onChange={() => setManualForm({ ...manualForm, delivery: 'courier', payment: 'bank' })}
                         />
                         <Truck />
                         <span>Courier<small>Rs. 500</small></span>
@@ -2172,16 +2188,18 @@ export default function App() {
 
                     <h3>Payment method</h3>
                     <div className="choices">
-                      <label>
-                        <input
-                          type="radio"
-                          name="manualPayment"
-                          checked={manualForm.payment === 'cod'}
-                          onChange={() => setManualForm({ ...manualForm, payment: 'cod' })}
-                        />
-                        <Banknote />
-                        <span>Cash on Delivery<small>Pay when it arrives</small></span>
-                      </label>
+                      {manualForm.delivery === 'post' && (
+                        <label>
+                          <input
+                            type="radio"
+                            name="manualPayment"
+                            checked={manualForm.payment === 'cod'}
+                            onChange={() => setManualForm({ ...manualForm, payment: 'cod' })}
+                          />
+                          <Banknote />
+                          <span>Cash on Delivery<small>Pay when it arrives</small></span>
+                        </label>
+                      )}
                       <label>
                         <input
                           type="radio"
@@ -2281,14 +2299,14 @@ export default function App() {
                         onChange={() => setForm({ ...form, delivery: 'post' })}
                       />
                       <Mail />
-                      <span>Post Office<small>Rs. 250</small></span>
+                      <span>Post Office<small>Rs. 380</small></span>
                     </label>
                     <label>
                       <input
                         type="radio"
                         name="delivery"
                         checked={form.delivery === 'courier'}
-                        onChange={() => setForm({ ...form, delivery: 'courier' })}
+                        onChange={() => setForm({ ...form, delivery: 'courier', payment: 'bank' })}
                       />
                       <Truck />
                       <span>Courier<small>Rs. 500</small></span>
@@ -2297,16 +2315,18 @@ export default function App() {
 
                   <h3>Payment method</h3>
                   <div className="choices">
-                    <label>
-                      <input
-                        type="radio"
-                        name="payment"
-                        checked={form.payment === 'cod'}
-                        onChange={() => setForm({ ...form, payment: 'cod' })}
-                      />
-                      <Banknote />
-                      <span>Cash on Delivery<small>Pay when it arrives</small></span>
-                    </label>
+                    {form.delivery === 'post' && (
+                      <label>
+                        <input
+                          type="radio"
+                          name="payment"
+                          checked={form.payment === 'cod'}
+                          onChange={() => setForm({ ...form, payment: 'cod' })}
+                        />
+                        <Banknote />
+                        <span>Cash on Delivery<small>Pay when it arrives</small></span>
+                      </label>
+                    )}
                     <label>
                       <input
                         type="radio"
@@ -2318,6 +2338,22 @@ export default function App() {
                       <span>Bank Transfer<small>Transfer and share proof with the shop</small></span>
                     </label>
                   </div>
+
+                  {form.payment === 'bank' && (
+                    <div style={{ margin: '14px 0', padding: '16px', border: '1px solid #e6cbd5', borderRadius: '12px', background: '#fff8fb' }}>
+                      <h3 style={{ marginTop: 0 }}>Bank Transfer Details</h3>
+                      <p style={{ marginTop: 0, color: '#666' }}>Please transfer the payment to either one of the following bank accounts.</p>
+                      {BANK_ACCOUNTS.map((account, index) => (
+                        <div key={account.bank} style={{ padding: '12px 0', borderTop: index ? '1px solid #eadde2' : 'none' }}>
+                          <strong>{account.bank}</strong>
+                          <p style={{ margin: '6px 0' }}>Account Name: <b>{account.holder}</b></p>
+                          <p style={{ margin: '6px 0' }}>Account Number: <b>{account.account}</b></p>
+                          <p style={{ margin: '6px 0 0' }}>Branch: {account.branch}</p>
+                        </div>
+                      ))}
+                      <small style={{ color: '#666' }}>Please send your bank transfer receipt/proof to Glamour Store after placing the order.</small>
+                    </div>
+                  )}
 
                   <h3>Your details</h3>
                   <input
