@@ -64,6 +64,20 @@ function applyDiscountToItems(items, discount) {
   }));
 }
 
+// Prefer item-level discount records. Older orders may only have an order-level
+// discount, so use that value only when no item-level discount is recorded.
+function getOrderDiscountForReport(order) {
+  const items = order.order_items || [];
+  const itemDiscountTotal = items.reduce(
+    (sum, item) => sum + Math.max(0, Number(item.discount_amount || 0)),
+    0
+  );
+
+  return itemDiscountTotal > 0
+    ? itemDiscountTotal
+    : Math.max(0, Number(order.discount_amount || 0));
+}
+
 function escapeReceiptHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -292,16 +306,15 @@ export default function App() {
     o => o.status === 'Delivered'
   );
 
-  // Reports include both new item-level discounts and legacy order-level discounts.
+  // Reports exclude cancelled orders. Count item-level discounts once.
+  // For legacy orders without item-level discounts, use the order-level value.
   const reportOrders = orders.filter(o => o.status !== 'Cancelled');
   const reportItems = reportOrders.flatMap(o => o.order_items || []);
   const totalProductRevenue = reportItems.reduce(
     (sum, item) => sum + Number(item.line_total || 0), 0
   );
   const totalDiscounts = reportOrders.reduce(
-    (sum, order) => sum
-      + Math.max(0, Number(order.discount_amount || 0))
-      + (order.order_items || []).reduce((itemSum, item) => itemSum + Math.max(0, Number(item.discount_amount || 0)), 0),
+    (sum, order) => sum + getOrderDiscountForReport(order),
     0
   );
   const netSales = Math.max(0, totalProductRevenue - totalDiscounts);
@@ -336,8 +349,7 @@ export default function App() {
       const grossOrderSales = (order.order_items || []).reduce(
         (sum, item) => sum + Number(item.line_total || 0), 0
       );
-      const itemDiscounts = (order.order_items || []).reduce((sum, item) => sum + Math.max(0, Number(item.discount_amount || 0)), 0);
-      entry.revenue += Math.max(0, grossOrderSales - itemDiscounts - Math.max(0, Number(order.discount_amount || 0)));
+      entry.revenue += Math.max(0, grossOrderSales - getOrderDiscountForReport(order));
       entry.orders += 1;
     });
     return Array.from(totals.values());
@@ -1884,7 +1896,7 @@ export default function App() {
                 <div className="panel">
                   <h3><TrendingUp size={18} /> Sales & Profit Reports</h3>
                   <p className="muted">
-                    Reports exclude cancelled orders. Net sales subtract item-level and older order-level discounts. Product cost is deducted to calculate actual profit. Delivery fees are not included.
+                    Reports exclude cancelled orders. Each discount is counted once: item-level discounts are used when available, and older order-level discounts are used as a fallback. Product cost is deducted to calculate actual profit. Delivery fees are not included.
                   </p>
 
                   <div className="stats">
