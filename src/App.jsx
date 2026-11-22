@@ -9,35 +9,26 @@ import {
 } from 'lucide-react';
 
 const money = n => `Rs. ${Number(n || 0).toLocaleString('en-LK')}`;
-
-function formatOrderDateTime(value) {
-  if (!value) return { date: 'Not available', time: 'Not available' };
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return { date: 'Not available', time: 'Not available' };
-  }
-
-  const options = { timeZone: 'Asia/Colombo' };
-  return {
-    date: date.toLocaleDateString('en-LK', {
-      ...options,
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    }),
-    time: date.toLocaleTimeString('en-LK', {
-      ...options,
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true
-    })
-  };
-}
 const DELIVERY = { post: 250, courier: 500 };
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const LOW_STOCK_LIMIT = 2;
+
+function formatOrderDateTime(value) {
+  if (!value) return { date: 'Not available', time: 'Not available' };
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { date: 'Not available', time: 'Not available' };
+
+  const options = { timeZone: 'Asia/Colombo' };
+  return {
+    date: date.toLocaleDateString('en-LK', {
+      ...options, day: '2-digit', month: 'short', year: 'numeric'
+    }),
+    time: date.toLocaleTimeString('en-LK', {
+      ...options, hour: '2-digit', minute: '2-digit', hour12: true
+    })
+  };
+}
 
 function escapeReceiptHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -45,51 +36,145 @@ function escapeReceiptHtml(value) {
   }[char]));
 }
 
+/*
+ * Item-level discount helper.
+ * If an order has item discount fields, use those.
+ * Otherwise, fall back to the old order-level discount for older orders.
+ */
+function hasItemDiscountData(order) {
+  return (order?.order_items || []).some(
+    item => item.discount_amount !== null && item.discount_amount !== undefined
+  );
+}
+
+function getOrderDiscountTotal(order) {
+  const items = order?.order_items || [];
+
+  if (hasItemDiscountData(order)) {
+    return items.reduce(
+      (sum, item) => sum + Math.max(0, Number(item.discount_amount || 0)),
+      0
+    );
+  }
+
+  return Math.max(0, Number(order?.discount_amount || 0));
+}
+
+function getOrderGrossTotal(order) {
+  return (order?.order_items || []).reduce(
+    (sum, item) => sum + Number(item.line_total || 0),
+    0
+  );
+}
+
 function printOrderReceipt(order) {
   const printWindow = window.open('', '_blank', 'width=800,height=900');
+
   if (!printWindow) {
     alert('Please allow pop-ups to print or save the receipt.');
     return;
   }
 
   const dateTime = formatOrderDateTime(order.created_at);
-  const items = (order.order_items || []).map(item => `
-    <tr>
-      <td>${escapeReceiptHtml(item.product_name || 'Product')}</td>
-      <td class="center">${Number(item.quantity || 0)}</td>
-      <td class="right">${money(item.line_total)}</td>
-    </tr>
-  `).join('');
+  const itemDiscountsExist = hasItemDiscountData(order);
+
+  const items = (order.order_items || []).map(item => {
+    const gross = Number(item.line_total || 0);
+    const discount = Number(item.discount_amount || 0);
+    const net = Math.max(0, gross - discount);
+
+    return `
+      <tr>
+        <td>${escapeReceiptHtml(item.product_name || 'Product')}</td>
+        <td class="center">${Number(item.quantity || 0)}</td>
+        <td class="right">${money(gross)}</td>
+        ${itemDiscountsExist ? `
+          <td class="right discount">${discount > 0 ? `-${money(discount)}` : '-'}</td>
+          <td class="right">${money(net)}</td>
+        ` : ''}
+      </tr>
+    `;
+  }).join('');
+
   const orderNumber = order.order_code || order.id?.slice(0, 8).toUpperCase() || '';
   const deliveryName = order.delivery_method === 'post' ? 'Post Office' : 'Courier';
   const paymentName = order.payment_method === 'cod' ? 'Cash on Delivery' : 'Bank Transfer';
+  const totalDiscount = getOrderDiscountTotal(order);
+  const oldOrderDiscount = !itemDiscountsExist ? totalDiscount : 0;
 
   printWindow.document.write(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Glamour Store Receipt - ${escapeReceiptHtml(orderNumber)}</title>
+<html><head><meta charset="utf-8">
+<title>Glamour Store Receipt - ${escapeReceiptHtml(orderNumber)}</title>
 <style>
-  *{box-sizing:border-box} body{font-family:Arial,sans-serif;color:#222;margin:0;padding:32px}
-  .receipt{max-width:720px;margin:auto}.brand{text-align:center;border-bottom:2px solid #945c70;padding-bottom:18px}
-  h1{color:#945c70;margin:0 0 6px;font-size:30px}.muted{color:#666;font-size:13px}
-  .meta{display:flex;justify-content:space-between;gap:20px;margin:22px 0}.meta p{margin:6px 0}
-  table{width:100%;border-collapse:collapse;margin:18px 0}th,td{padding:11px 8px;border-bottom:1px solid #ddd;text-align:left}
-  th{background:#f7f0f3}.center{text-align:center}.right{text-align:right}
-  .totals{margin-left:auto;width:min(100%,300px)}.totalrow{display:flex;justify-content:space-between;padding:7px 0}
-  .grand{font-size:19px;font-weight:bold;border-top:2px solid #945c70;margin-top:6px;padding-top:12px}
-  .footer{text-align:center;border-top:1px solid #ddd;margin-top:30px;padding-top:18px;color:#666;font-size:13px}
-  @media print{body{padding:10mm}.no-print{display:none}}
+*{box-sizing:border-box}
+body{font-family:Arial,sans-serif;color:#222;margin:0;padding:32px}
+.receipt{max-width:760px;margin:auto}
+.brand{text-align:center;border-bottom:2px solid #945c70;padding-bottom:18px}
+h1{color:#945c70;margin:0 0 6px;font-size:30px}
+.muted{color:#666;font-size:13px}
+.meta{display:flex;justify-content:space-between;gap:20px;margin:22px 0}
+.meta p{margin:6px 0}
+table{width:100%;border-collapse:collapse;margin:18px 0}
+th,td{padding:11px 8px;border-bottom:1px solid #ddd;text-align:left}
+th{background:#f7f0f3}
+.center{text-align:center}
+.right{text-align:right}
+.discount{color:#15803d}
+.totals{margin-left:auto;width:min(100%,320px)}
+.totalrow{display:flex;justify-content:space-between;padding:7px 0}
+.grand{font-size:19px;font-weight:bold;border-top:2px solid #945c70;margin-top:6px;padding-top:12px}
+.footer{text-align:center;border-top:1px solid #ddd;margin-top:30px;padding-top:18px;color:#666;font-size:13px}
+@media print{body{padding:10mm}.no-print{display:none}}
 </style></head><body><main class="receipt">
-  <header class="brand"><h1>Glamour Store</h1><div class="muted">Customer Receipt</div></header>
-  <section class="meta"><div><p><b>Receipt No:</b> ${escapeReceiptHtml(orderNumber)}</p><p><b>Date:</b> ${escapeReceiptHtml(dateTime.date)}</p><p><b>Time:</b> ${escapeReceiptHtml(dateTime.time)}</p></div>
-  <div><p><b>Customer:</b> ${escapeReceiptHtml(order.customer_name)}</p><p><b>Phone:</b> ${escapeReceiptHtml(order.phone)}</p><p><b>Address:</b> ${escapeReceiptHtml(order.address)}</p></div></section>
-  <table><thead><tr><th>Product</th><th class="center">Qty</th><th class="right">Amount</th></tr></thead><tbody>${items}</tbody></table>
-  <section class="totals">${Number(order.discount_amount || 0) > 0 ? `<div class="totalrow"><span>Discount (${escapeReceiptHtml(order.discount_name || 'Offer')})</span><b>-${money(order.discount_amount)}</b></div>` : ''}<div class="totalrow"><span>Delivery (${escapeReceiptHtml(deliveryName)})</span><b>${money(order.delivery_fee)}</b></div>
-  <div class="totalrow"><span>Payment</span><b>${escapeReceiptHtml(paymentName)}</b></div>
-  <div class="totalrow"><span>Payment status</span><b>${escapeReceiptHtml(order.payment_status || 'Pending')}</b></div>
-  <div class="totalrow grand"><span>Total</span><span>${money(order.total)}</span></div></section>
-  ${order.note ? `<p><b>Note:</b> ${escapeReceiptHtml(order.note)}</p>` : ''}
-  <footer class="footer">Thank you for shopping with Glamour Store!</footer>
-  <p class="no-print" style="text-align:center;margin-top:24px"><button onclick="window.print()">Print / Save as PDF</button></p>
+<header class="brand"><h1>Glamour Store</h1><div class="muted">Customer Receipt</div></header>
+
+<section class="meta">
+<div>
+<p><b>Receipt No:</b> ${escapeReceiptHtml(orderNumber)}</p>
+<p><b>Date:</b> ${escapeReceiptHtml(dateTime.date)}</p>
+<p><b>Time:</b> ${escapeReceiptHtml(dateTime.time)}</p>
+</div>
+<div>
+<p><b>Customer:</b> ${escapeReceiptHtml(order.customer_name)}</p>
+<p><b>Phone:</b> ${escapeReceiptHtml(order.phone)}</p>
+<p><b>Address:</b> ${escapeReceiptHtml(order.address)}</p>
+</div>
+</section>
+
+<table>
+<thead>
+<tr>
+<th>Product</th><th class="center">Qty</th><th class="right">Gross</th>
+${itemDiscountsExist ? '<th class="right">Discount</th><th class="right">Net</th>' : ''}
+</tr>
+</thead>
+<tbody>${items}</tbody>
+</table>
+
+<section class="totals">
+${oldOrderDiscount > 0 ? `
+<div class="totalrow">
+<span>Discount (${escapeReceiptHtml(order.discount_name || 'Offer')})</span>
+<b class="discount">-${money(oldOrderDiscount)}</b>
+</div>` : ''}
+${itemDiscountsExist && totalDiscount > 0 ? `
+<div class="totalrow"><span>Total item discounts</span><b class="discount">-${money(totalDiscount)}</b></div>
+` : ''}
+<div class="totalrow">
+<span>Delivery (${escapeReceiptHtml(deliveryName)})</span><b>${money(order.delivery_fee)}</b>
+</div>
+<div class="totalrow"><span>Payment</span><b>${escapeReceiptHtml(paymentName)}</b></div>
+<div class="totalrow"><span>Payment status</span><b>${escapeReceiptHtml(order.payment_status || 'Pending')}</b></div>
+<div class="totalrow grand"><span>Total</span><span>${money(order.total)}</span></div>
+</section>
+
+${order.note ? `<p><b>Note:</b> ${escapeReceiptHtml(order.note)}</p>` : ''}
+<footer class="footer">Thank you for shopping with Glamour Store!</footer>
+<p class="no-print" style="text-align:center;margin-top:24px">
+<button onclick="window.print()">Print / Save as PDF</button>
+</p>
 </main><script>window.onload=()=>window.print();</script></body></html>`);
+
   printWindow.document.close();
 }
 
@@ -106,11 +191,21 @@ function openOrderWhatsApp(order) {
   }
 
   const orderNumber = order.order_code || order.id?.slice(0, 8).toUpperCase() || '';
-  const items = (order.order_items || []).map(item =>
-    `• ${item.product_name} × ${item.quantity} - ${money(item.line_total)}`
-  ).join('\n');
+  const itemDiscountsExist = hasItemDiscountData(order);
+
+  const items = (order.order_items || []).map(item => {
+    const gross = Number(item.line_total || 0);
+    const discount = Number(item.discount_amount || 0);
+    const net = Math.max(0, gross - discount);
+
+    return itemDiscountsExist
+      ? `• ${item.product_name} × ${item.quantity} - ${money(net)}${discount > 0 ? ` (Discount: -${money(discount)})` : ''}`
+      : `• ${item.product_name} × ${item.quantity} - ${money(gross)}`;
+  }).join('\n');
+
   const deliveryName = order.delivery_method === 'post' ? 'Post Office' : 'Courier';
   const paymentName = order.payment_method === 'cod' ? 'Cash on Delivery' : 'Bank Transfer';
+  const totalDiscount = getOrderDiscountTotal(order);
 
   const message = [
     `Hello ${order.customer_name || 'Customer'}!`,
@@ -121,7 +216,7 @@ function openOrderWhatsApp(order) {
     'Items:',
     items || 'Order items',
     '',
-    ...(Number(order.discount_amount || 0) > 0 ? [`Discount: ${order.discount_name || 'Offer'} (-${money(order.discount_amount)})`] : []),
+    ...(totalDiscount > 0 ? [`Total Discount: -${money(totalDiscount)}`] : []),
     `Delivery: ${deliveryName} (${money(order.delivery_fee)})`,
     `Payment: ${paymentName}`,
     `Order Total: ${money(order.total)}`,
@@ -131,8 +226,11 @@ function openOrderWhatsApp(order) {
     'Glamour Store'
   ].join('\n');
 
-  const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-  window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+  window.open(
+    `https://wa.me/${phone}?text=${encodeURIComponent(message)}`,
+    '_blank',
+    'noopener,noreferrer'
+  );
 }
 
 export default function App() {
@@ -141,7 +239,14 @@ export default function App() {
   const [products, setProducts] = useState([]);
   const [discounts, setDiscounts] = useState([]);
   const [editingDiscount, setEditingDiscount] = useState(null);
-  const [discountForm, setDiscountForm] = useState({ name: '', discount_type: 'percentage', discount_value: '' });
+
+  const [discountForm, setDiscountForm] = useState({
+    name: '',
+    discount_type: 'percentage',
+    discount_value: '',
+    product_id: ''
+  });
+
   const [cart, setCart] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -183,98 +288,146 @@ export default function App() {
 
   const configured = !!supabase;
 
-  const subtotal = cart.reduce(
-    (s, item) => s + Number(item.price) * item.qty, 0
-  );
-  const activeDiscount = discounts.find(d => d.active) || null;
-  function calculateDiscount(amount) {
-    if (!activeDiscount || Number(amount) <= 0) return 0;
-    const value = Number(activeDiscount.discount_value || 0);
-    if (activeDiscount.discount_type === 'percentage') return Math.min(Number(amount), Number(amount) * value / 100);
-    return Math.min(Number(amount), value);
+  // Specific product discount has priority over the global discount.
+  function getApplicableDiscount(productId) {
+    const specific = discounts.find(d =>
+      d.active &&
+      d.product_id &&
+      String(d.product_id) === String(productId)
+    );
+
+    if (specific) return specific;
+
+    return discounts.find(d => d.active && !d.product_id) || null;
   }
-  const discountAmount = calculateDiscount(subtotal);
+
+  // Fixed discount is applied once to the entire product line, not per unit.
+  function calculateLineDiscount(amount, discount) {
+    const gross = Math.max(0, Number(amount || 0));
+    if (!discount || gross <= 0) return 0;
+
+    const value = Number(discount.discount_value || 0);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+
+    if (discount.discount_type === 'percentage') {
+      return Math.min(gross, gross * Math.min(value, 100) / 100);
+    }
+
+    return Math.min(gross, value);
+  }
+
+  function getDiscountedLines(items) {
+    return items.map(item => {
+      const gross = Number(item.price || 0) * Number(item.qty || 0);
+      const discount = getApplicableDiscount(item.id);
+      const discountAmount = calculateLineDiscount(gross, discount);
+
+      return {
+        ...item,
+        gross,
+        discount,
+        discount_amount: discountAmount,
+        net: Math.max(0, gross - discountAmount)
+      };
+    });
+  }
+
+  const cartLines = getDiscountedLines(cart);
+  const subtotal = cartLines.reduce((sum, item) => sum + item.gross, 0);
+  const discountAmount = cartLines.reduce((sum, item) => sum + item.discount_amount, 0);
   const deliveryFee = DELIVERY[form.delivery];
   const total = Math.max(0, subtotal - discountAmount + deliveryFee);
 
-  const manualSubtotal = manualItems.reduce(
-    (s, item) => s + Number(item.price) * item.qty, 0
-  );
-  const manualDiscountAmount = calculateDiscount(manualSubtotal);
+  const manualLines = getDiscountedLines(manualItems);
+  const manualSubtotal = manualLines.reduce((sum, item) => sum + item.gross, 0);
+  const manualDiscountAmount = manualLines.reduce((sum, item) => sum + item.discount_amount, 0);
   const manualDeliveryFee = DELIVERY[manualForm.delivery];
   const manualTotal = Math.max(0, manualSubtotal - manualDiscountAmount + manualDeliveryFee);
+
+  function getOrderDiscountMetadata(lines, totalDiscount) {
+    const discountedLines = lines.filter(line => line.discount_amount > 0);
+    const names = [...new Set(discountedLines.map(line => line.discount?.name).filter(Boolean))];
+    const types = [...new Set(discountedLines.map(line => line.discount?.discount_type).filter(Boolean))];
+
+    return {
+      discount_name: names.length ? names.join(', ') : null,
+      discount_type: types.length === 1 ? types[0] : types.length > 1 ? 'mixed' : null,
+      discount_value: types.length === 1 && discountedLines.length === 1
+        ? Number(discountedLines[0].discount?.discount_value || 0)
+        : 0,
+      discount_amount: totalDiscount
+    };
+  }
 
   const lowStockProducts = products.filter(
     p => Number(p.stock) > 0 && Number(p.stock) <= LOW_STOCK_LIMIT
   );
-
-  const outOfStockProducts = products.filter(
-    p => Number(p.stock) <= 0
-  );
-
+  const outOfStockProducts = products.filter(p => Number(p.stock) <= 0);
   const lowStockCount = lowStockProducts.length;
   const outOfStockCount = outOfStockProducts.length;
 
-  // Dashboard summary calculations
   const totalSales = orders
     .filter(o => o.status !== 'Cancelled')
     .reduce((sum, o) => sum + Number(o.total || 0), 0);
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-
   const tomorrowStart = new Date(todayStart);
   tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
   const todayOrders = orders.filter(o => {
     if (!o.created_at) return false;
-
     const orderDate = new Date(o.created_at);
-
-    return (
-      !Number.isNaN(orderDate.getTime()) &&
-      orderDate >= todayStart &&
-      orderDate < tomorrowStart
-    );
+    return !Number.isNaN(orderDate.getTime()) &&
+      orderDate >= todayStart && orderDate < tomorrowStart;
   });
 
   const pendingOrders = orders.filter(
     o => o.status !== 'Delivered' && o.status !== 'Cancelled'
   );
+  const deliveredOrders = orders.filter(o => o.status === 'Delivered');
 
-  const deliveredOrders = orders.filter(
-    o => o.status === 'Delivered'
-  );
-
-  // Sales and profit report calculations. Cancelled orders are excluded.
-  // Item line totals are gross product sales; discounts are subtracted once
-  // at order level. Delivery fees are excluded from product sales and profit.
+  // Reports: new orders use item discounts; old orders use order-level discount.
   const reportOrders = orders.filter(o => o.status !== 'Cancelled');
   const reportItems = reportOrders.flatMap(o => o.order_items || []);
+
   const totalProductRevenue = reportItems.reduce(
     (sum, item) => sum + Number(item.line_total || 0), 0
   );
+
   const totalDiscounts = reportOrders.reduce(
-    (sum, order) => sum + Math.max(0, Number(order.discount_amount || 0)), 0
+    (sum, order) => sum + getOrderDiscountTotal(order), 0
   );
+
   const netSales = Math.max(0, totalProductRevenue - totalDiscounts);
+
   const totalProductCost = reportItems.reduce(
     (sum, item) => sum + Number(item.unit_cost || 0) * Number(item.quantity || 0), 0
   );
+
   const actualProfit = netSales - totalProductCost;
-  const itemsWithoutCost = reportItems.filter(item => Number(item.unit_cost || 0) <= 0).length;
+
+  const itemsWithoutCost = reportItems.filter(
+    item => Number(item.unit_cost || 0) <= 0
+  ).length;
 
   function colomboMonthParts(value) {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: 'Asia/Colombo', year: 'numeric', month: 'short'
     }).formatToParts(new Date(value));
+
     const get = type => parts.find(part => part.type === type)?.value || '';
-    return { key: `${get('year')}-${get('month')}`, label: `${get('month')} ${get('year')}` };
+
+    return {
+      key: `${get('year')}-${get('month')}`,
+      label: `${get('month')} ${get('year')}`
+    };
   }
 
   const monthlySales = (() => {
     const totals = new Map();
     const now = new Date();
+
     for (let offset = 5; offset >= 0; offset--) {
       const date = new Date(now.getFullYear(), now.getMonth() - offset, 1);
       const month = colomboMonthParts(date);
@@ -285,74 +438,175 @@ export default function App() {
       if (!order.created_at) return;
       const month = colomboMonthParts(order.created_at);
       if (!totals.has(month.key)) return;
+
       const entry = totals.get(month.key);
-      const grossOrderSales = (order.order_items || []).reduce(
-        (sum, item) => sum + Number(item.line_total || 0), 0
-      );
-      entry.revenue += Math.max(0, grossOrderSales - Math.max(0, Number(order.discount_amount || 0)));
+      const grossOrderSales = getOrderGrossTotal(order);
+      const orderDiscount = getOrderDiscountTotal(order);
+
+      entry.revenue += Math.max(0, grossOrderSales - orderDiscount);
       entry.orders += 1;
     });
+
     return Array.from(totals.values());
   })();
 
+  // For old orders, distribute the order-level discount proportionally
+  // across the order's products when calculating best-selling net revenue.
   const bestSellingProducts = (() => {
     const totals = new Map();
-    reportItems.forEach(item => {
-      const key = item.product_id || item.product_name;
-      const current = totals.get(key) || {
-        name: item.product_name || 'Product', quantity: 0, revenue: 0
-      };
-      current.quantity += Number(item.quantity || 0);
-      current.revenue += Number(item.line_total || 0);
-      totals.set(key, current);
+
+    reportOrders.forEach(order => {
+      const items = order.order_items || [];
+      const grossTotal = getOrderGrossTotal(order);
+      const orderDiscount = getOrderDiscountTotal(order);
+      const oldOrderDiscount = hasItemDiscountData(order) ? 0 : orderDiscount;
+
+      items.forEach(item => {
+        const gross = Number(item.line_total || 0);
+        const itemDiscount = hasItemDiscountData(order)
+          ? Number(item.discount_amount || 0)
+          : grossTotal > 0 ? oldOrderDiscount * gross / grossTotal : 0;
+
+        const key = item.product_id || item.product_name;
+        const current = totals.get(key) || {
+          name: item.product_name || 'Product',
+          quantity: 0,
+          revenue: 0
+        };
+
+        current.quantity += Number(item.quantity || 0);
+        current.revenue += Math.max(0, gross - itemDiscount);
+        totals.set(key, current);
+      });
     });
+
     return Array.from(totals.values())
       .sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue)
       .slice(0, 5);
   })();
+
   const maxMonthlySales = Math.max(1, ...monthlySales.map(month => month.revenue));
 
   async function loadDiscounts() {
     if (!supabase) return;
-    const { data, error } = await supabase.from('discounts').select('*').order('created_at', { ascending: false });
-    if (error) { setNotice(error.message); return; }
+
+    const { data, error } = await supabase
+      .from('discounts')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      setNotice(error.message);
+      return;
+    }
+
     setDiscounts(data || []);
+  }
+
+  function resetDiscountForm() {
+    setDiscountForm({
+      name: '',
+      discount_type: 'percentage',
+      discount_value: '',
+      product_id: ''
+    });
+    setEditingDiscount(null);
   }
 
   async function saveDiscount(e) {
     e.preventDefault();
-    if (!discountForm.name.trim() || !(Number(discountForm.discount_value) > 0)) { setNotice('Enter a discount name and a value greater than zero.'); return; }
-    setLoading(true); setNotice('');
+
+    const value = Number(discountForm.discount_value);
+
+    if (!discountForm.name.trim() || !Number.isFinite(value) || value <= 0) {
+      setNotice('Enter a discount name and a value greater than zero.');
+      return;
+    }
+
+    if (discountForm.discount_type === 'percentage' && value > 100) {
+      setNotice('Percentage discount cannot be greater than 100%.');
+      return;
+    }
+
+    setLoading(true);
+    setNotice('');
+
     try {
-      const payload = { name: discountForm.name.trim(), discount_type: discountForm.discount_type, discount_value: Number(discountForm.discount_value), active: editingDiscount ? !!editingDiscount.active : false };
+      const payload = {
+        name: discountForm.name.trim(),
+        discount_type: discountForm.discount_type,
+        discount_value: value,
+        product_id: discountForm.product_id || null,
+        active: editingDiscount ? !!editingDiscount.active : false
+      };
+
       const result = editingDiscount
         ? await supabase.from('discounts').update(payload).eq('id', editingDiscount.id)
         : await supabase.from('discounts').insert(payload);
+
       if (result.error) throw result.error;
-      setDiscountForm({ name: '', discount_type: 'percentage', discount_value: '' }); setEditingDiscount(null);
-      await loadDiscounts(); setNotice('Discount saved successfully.');
-    } catch (err) { setNotice(err.message || 'Could not save discount.'); }
-    finally { setLoading(false); }
+
+      resetDiscountForm();
+      await loadDiscounts();
+      setNotice('Discount saved successfully.');
+    } catch (err) {
+      setNotice(err.message || 'Could not save discount.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function toggleDiscount(discount) {
-    setLoading(true); setNotice('');
+    setLoading(true);
+    setNotice('');
+
     try {
       if (!discount.active) {
-        const { error: offError } = await supabase.from('discounts').update({ active: false }).eq('active', true);
+        // Only one active global discount at a time.
+        // Product discounts are managed separately for each product.
+        let deactivateQuery = supabase
+          .from('discounts')
+          .update({ active: false })
+          .eq('active', true);
+
+        if (discount.product_id) {
+          deactivateQuery = deactivateQuery.eq('product_id', discount.product_id);
+        } else {
+          deactivateQuery = deactivateQuery.is('product_id', null);
+        }
+
+        const { error: offError } = await deactivateQuery;
         if (offError) throw offError;
       }
-      const { error } = await supabase.from('discounts').update({ active: !discount.active }).eq('id', discount.id);
+
+      const { error } = await supabase
+        .from('discounts')
+        .update({ active: !discount.active })
+        .eq('id', discount.id);
+
       if (error) throw error;
-      await loadDiscounts(); setNotice(discount.active ? 'Discount turned off.' : 'Discount activated.');
-    } catch (err) { setNotice(err.message || 'Could not update discount.'); }
-    finally { setLoading(false); }
+
+      await loadDiscounts();
+      setNotice(discount.active ? 'Discount turned off.' : 'Discount activated.');
+    } catch (err) {
+      setNotice(err.message || 'Could not update discount.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function deleteDiscount(id) {
     if (!confirm('Delete this discount?')) return;
+
     const { error } = await supabase.from('discounts').delete().eq('id', id);
-    if (error) setNotice(error.message); else { await loadDiscounts(); setNotice('Discount deleted.'); }
+
+    if (error) {
+      setNotice(error.message);
+    } else {
+      if (editingDiscount?.id === id) resetDiscountForm();
+      await loadDiscounts();
+      setNotice('Discount deleted.');
+    }
   }
 
   async function loadProducts() {
@@ -392,6 +646,7 @@ export default function App() {
       const { data: listener } = supabase.auth.onAuthStateChange(
         (event, session) => {
           setOwner(session?.user || null);
+
           if (event === 'PASSWORD_RECOVERY') {
             setRecoveryMode(true);
             setResetMode(false);
@@ -405,7 +660,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (owner) { loadOrders(); loadDiscounts(); }
+    if (owner) {
+      loadOrders();
+      loadDiscounts();
+    }
   }, [owner]);
 
   function addToCart(p) {
@@ -435,10 +693,7 @@ export default function App() {
     setCart(old =>
       old.map(x =>
         x.id === id
-          ? {
-              ...x,
-              qty: Math.max(1, Math.min(Number(x.stock), x.qty + delta))
-            }
+          ? { ...x, qty: Math.max(1, Math.min(Number(x.stock), x.qty + delta)) }
           : x
       )
     );
@@ -473,14 +728,19 @@ export default function App() {
     setNotice('');
 
     try {
-      const rows = cart.map(p => ({
+      const rows = cartLines.map(p => ({
         product_id: p.id,
         product_name: p.name,
         quantity: p.qty,
         unit_price: Number(p.price),
-        line_total: Number(p.price) * p.qty,
-        unit_cost: Number(p.cost_price || 0)
+        line_total: p.gross,
+        unit_cost: Number(p.cost_price || 0),
+        discount_type: p.discount_amount > 0 ? p.discount?.discount_type : null,
+        discount_value: p.discount_amount > 0 ? Number(p.discount?.discount_value || 0) : 0,
+        discount_amount: p.discount_amount
       }));
+
+      const discountMetadata = getOrderDiscountMetadata(cartLines, discountAmount);
 
       const order = await saveOrderWithStock(
         {
@@ -492,10 +752,7 @@ export default function App() {
           payment_method: form.payment,
           note: form.note,
           subtotal,
-          discount_name: discountAmount > 0 ? activeDiscount?.name : null,
-          discount_type: discountAmount > 0 ? activeDiscount?.discount_type : null,
-          discount_value: discountAmount > 0 ? Number(activeDiscount?.discount_value || 0) : 0,
-          discount_amount: discountAmount,
+          ...discountMetadata,
           total,
           payment_status: form.payment === 'cod'
             ? 'Pay on delivery'
@@ -557,6 +814,7 @@ export default function App() {
       });
 
       if (error) throw error;
+
       if (!data?.success) {
         setNotice(data?.message || 'Order not found. Please check your details.');
         return;
@@ -592,15 +850,20 @@ export default function App() {
 
   async function sendPasswordReset(e) {
     e.preventDefault();
+
     if (!supabase) return setNotice('Supabase is not connected.');
     if (!loginEmail.trim()) return setNotice('Please enter your owner email first.');
+
     setLoading(true);
     setNotice('');
+
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.trim(), {
         redirectTo: window.location.origin
       });
+
       if (error) throw error;
+
       setNotice('Password reset email sent. Please check your inbox and Spam folder.');
       setResetMode(false);
     } catch (err) {
@@ -612,16 +875,26 @@ export default function App() {
 
   async function saveRecoveredPassword(e) {
     e.preventDefault();
-    if (newPassword.length < 6) return setNotice('Password must contain at least 6 characters.');
-    if (newPassword !== confirmPassword) return setNotice('Passwords do not match.');
+
+    if (newPassword.length < 6) {
+      return setNotice('Password must contain at least 6 characters.');
+    }
+
+    if (newPassword !== confirmPassword) {
+      return setNotice('Passwords do not match.');
+    }
+
     setLoading(true);
+
     try {
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
+
       setRecoveryMode(false);
       setNewPassword('');
       setConfirmPassword('');
       setNotice('Password changed successfully. Please sign in with your new password.');
+
       await supabase.auth.signOut();
       setOwner(null);
     } catch (err) {
@@ -633,19 +906,35 @@ export default function App() {
 
   async function changeOwnerPassword(e) {
     e.preventDefault();
-    if (!currentPassword || !newPassword) return setNotice('Please fill in all password fields.');
-    if (newPassword.length < 6) return setNotice('New password must contain at least 6 characters.');
-    if (newPassword !== confirmPassword) return setNotice('New passwords do not match.');
+
+    if (!currentPassword || !newPassword) {
+      return setNotice('Please fill in all password fields.');
+    }
+
+    if (newPassword.length < 6) {
+      return setNotice('New password must contain at least 6 characters.');
+    }
+
+    if (newPassword !== confirmPassword) {
+      return setNotice('New passwords do not match.');
+    }
+
     setLoading(true);
+
     try {
       const { error: verifyError } = await supabase.auth.signInWithPassword({
         email: owner.email,
         password: currentPassword
       });
+
       if (verifyError) throw new Error('Current password is incorrect.');
+
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
-      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
       setNotice('Owner password changed successfully.');
     } catch (err) {
       setNotice(err.message || 'Could not change password.');
@@ -767,12 +1056,20 @@ export default function App() {
       return;
     }
 
-    if (newProduct.price === '' || !Number.isFinite(Number(newProduct.price)) || Number(newProduct.price) < 0) {
+    if (
+      newProduct.price === '' ||
+      !Number.isFinite(Number(newProduct.price)) ||
+      Number(newProduct.price) < 0
+    ) {
       setNotice('Please enter a valid selling price.');
       return;
     }
 
-    if (newProduct.cost_price === '' || !Number.isFinite(Number(newProduct.cost_price)) || Number(newProduct.cost_price) < 0) {
+    if (
+      newProduct.cost_price === '' ||
+      !Number.isFinite(Number(newProduct.cost_price)) ||
+      Number(newProduct.cost_price) < 0
+    ) {
       setNotice('Please enter a valid product cost price.');
       return;
     }
@@ -883,8 +1180,9 @@ export default function App() {
       .update({ stock: value })
       .eq('id', id);
 
-    if (error) setNotice(error.message);
-    else {
+    if (error) {
+      setNotice(error.message);
+    } else {
       await loadProducts();
       setNotice('Stock updated successfully.');
     }
@@ -898,8 +1196,9 @@ export default function App() {
       .update({ active: false })
       .eq('id', id);
 
-    if (error) setNotice(error.message);
-    else {
+    if (error) {
+      setNotice(error.message);
+    } else {
       setNotice('Product removed');
       await loadProducts();
     }
@@ -974,14 +1273,22 @@ export default function App() {
     setNotice('');
 
     try {
-      const rows = manualItems.map(p => ({
+      const rows = manualLines.map(p => ({
         product_id: p.id,
         product_name: p.name,
         quantity: p.qty,
         unit_price: Number(p.price),
-        line_total: Number(p.price) * p.qty,
-        unit_cost: Number(p.cost_price || 0)
+        line_total: p.gross,
+        unit_cost: Number(p.cost_price || 0),
+        discount_type: p.discount_amount > 0 ? p.discount?.discount_type : null,
+        discount_value: p.discount_amount > 0 ? Number(p.discount?.discount_value || 0) : 0,
+        discount_amount: p.discount_amount
       }));
+
+      const discountMetadata = getOrderDiscountMetadata(
+        manualLines,
+        manualDiscountAmount
+      );
 
       const order = await saveOrderWithStock(
         {
@@ -993,10 +1300,7 @@ export default function App() {
           payment_method: manualForm.payment,
           note: manualForm.note,
           subtotal: manualSubtotal,
-          discount_name: manualDiscountAmount > 0 ? activeDiscount?.name : null,
-          discount_type: manualDiscountAmount > 0 ? activeDiscount?.discount_type : null,
-          discount_value: manualDiscountAmount > 0 ? Number(activeDiscount?.discount_value || 0) : 0,
-          discount_amount: manualDiscountAmount,
+          ...discountMetadata,
           total: manualTotal,
           payment_status: manualForm.payment === 'cod'
             ? 'Pay on delivery'
@@ -1045,47 +1349,26 @@ export default function App() {
     if (value <= 0) {
       return (
         <span style={{
-          display: 'inline-block',
-          background: '#fee2e2',
-          color: '#b91c1c',
-          padding: '4px 9px',
-          borderRadius: '20px',
-          fontSize: '11px',
-          fontWeight: 800
-        }}>
-          OUT OF STOCK
-        </span>
+          display: 'inline-block', background: '#fee2e2', color: '#b91c1c',
+          padding: '4px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 800
+        }}>OUT OF STOCK</span>
       );
     }
 
     if (value <= LOW_STOCK_LIMIT) {
       return (
         <span style={{
-          display: 'inline-block',
-          background: '#fef3c7',
-          color: '#92400e',
-          padding: '4px 9px',
-          borderRadius: '20px',
-          fontSize: '11px',
-          fontWeight: 800
-        }}>
-          LOW STOCK
-        </span>
+          display: 'inline-block', background: '#fef3c7', color: '#92400e',
+          padding: '4px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 800
+        }}>LOW STOCK</span>
       );
     }
 
     return (
       <span style={{
-        display: 'inline-block',
-        background: '#dcfce7',
-        color: '#166534',
-        padding: '4px 9px',
-        borderRadius: '20px',
-        fontSize: '11px',
-        fontWeight: 800
-      }}>
-        IN STOCK
-      </span>
+        display: 'inline-block', background: '#dcfce7', color: '#166534',
+        padding: '4px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 800
+      }}>IN STOCK</span>
     );
   }
 
@@ -1101,31 +1384,22 @@ export default function App() {
           }}
         >
           <span className="brandmark">G</span>
-          <span>
-            <b>GLAMOUR STORE</b>
-            <small>SHOP WITH LOVE</small>
-          </span>
+          <span><b>GLAMOUR STORE</b><small>SHOP WITH LOVE</small></span>
         </a>
 
         <nav>
-          <button
-            className={tab === 'shop' ? 'nav active' : 'nav'}
-            onClick={() => setTab('shop')}
-          >
+          <button className={tab === 'shop' ? 'nav active' : 'nav'} onClick={() => setTab('shop')}>
             <Store size={17} /> Shop
           </button>
-
           <button className="nav cartnav" onClick={() => setShowCheckout(true)}>
             <ShoppingCart size={17} /> Cart <i>{cartCount}</i>
           </button>
-
           <button
             className={tab === 'tracking' ? 'nav active' : 'nav'}
             onClick={() => { setTab('tracking'); setNotice(''); }}
           >
             <Search size={17} /> Track Order
           </button>
-
           <button
             className={tab === 'dashboard' ? 'nav active' : 'nav'}
             onClick={() => setTab('dashboard')}
@@ -1137,9 +1411,8 @@ export default function App() {
 
       {!configured && (
         <div className="setupbanner">
-          Setup needed: connect your free Supabase project using the
-          instructions in <b>SETUP_GUIDE.txt</b>. This preview is not yet
-          accepting live orders.
+          Setup needed: connect your free Supabase project using the instructions in
+          <b> SETUP_GUIDE.txt</b>. This preview is not yet accepting live orders.
         </div>
       )}
 
@@ -1173,7 +1446,6 @@ export default function App() {
                 <span className="eyebrow">OUR COLLECTION</span>
                 <h2>Shop our products</h2>
               </div>
-
               <label className="search">
                 <Search size={17} />
                 <input
@@ -1192,33 +1464,54 @@ export default function App() {
               </div>
             ) : (
               <div className="products">
-                {visible.map(p => (
-                  <article className="product" key={p.id}>
-                    <div className="productimage">
-                      {p.image_url
-                        ? <img src={p.image_url} alt={p.name} />
-                        : <ImagePlus size={32} />}
-                    </div>
-                    <div className="productbody">
-                      <h3>{p.name}</h3>
-                      <p>{p.description}</p>
-                      <div style={{ marginBottom: '8px' }}>
-                        {stockBadge(p.stock)}
+                {visible.map(p => {
+                  const productDiscount = getApplicableDiscount(p.id);
+                  const productDiscountAmount = calculateLineDiscount(Number(p.price), productDiscount);
+                  const productNetPrice = Math.max(0, Number(p.price) - productDiscountAmount);
+
+                  return (
+                    <article className="product" key={p.id}>
+                      <div className="productimage">
+                        {p.image_url
+                          ? <img src={p.image_url} alt={p.name} />
+                          : <ImagePlus size={32} />}
                       </div>
-                      <div className="productfoot">
-                        <b>{money(p.price)}</b>
-                        <button
-                          className="add"
-                          disabled={p.stock < 1}
-                          onClick={() => addToCart(p)}
-                        >
-                          {p.stock > 0 ? 'Add to cart' : 'Out of stock'}
-                        </button>
+                      <div className="productbody">
+                        <h3>{p.name}</h3>
+                        <p>{p.description}</p>
+                        <div style={{ marginBottom: '8px' }}>{stockBadge(p.stock)}</div>
+
+                        {productDiscountAmount > 0 ? (
+                          <div style={{ marginBottom: '8px' }}>
+                            <small style={{ textDecoration: 'line-through', color: '#888' }}>
+                              {money(p.price)}
+                            </small>
+                            <div style={{ color: '#15803d', fontWeight: 800 }}>
+                              {money(productNetPrice)}
+                              <small style={{ marginLeft: '7px' }}>
+                                {productDiscount.discount_type === 'percentage'
+                                  ? `${productDiscount.discount_value}% OFF`
+                                  : `${money(productDiscountAmount)} OFF`}
+                              </small>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div className="productfoot">
+                          <b>{productDiscountAmount > 0 ? money(productNetPrice) : money(p.price)}</b>
+                          <button
+                            className="add"
+                            disabled={p.stock < 1}
+                            onClick={() => addToCart(p)}
+                          >
+                            {p.stock > 0 ? 'Add to cart' : 'Out of stock'}
+                          </button>
+                        </div>
+                        <small>{p.stock} available</small>
                       </div>
-                      <small>{p.stock} available</small>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -1241,7 +1534,9 @@ export default function App() {
                   maxLength={8}
                   placeholder="Example: A1B2C3D4"
                   value={trackingCode}
-                  onChange={e => setTrackingCode(e.target.value.toUpperCase().replace(/[^0-9A-F]/g, '').slice(0, 8))}
+                  onChange={e => setTrackingCode(
+                    e.target.value.toUpperCase().replace(/[^0-9A-F]/g, '').slice(0, 8)
+                  )}
                 />
               </label>
               <label>
@@ -1281,20 +1576,30 @@ export default function App() {
                     const steps = ['New', 'Accepted', 'Packed', 'Dispatched', 'Delivered'];
                     const currentIndex = steps.indexOf(trackingOrder.status);
                     const completed = trackingOrder.status !== 'Cancelled' && currentIndex >= index;
+
                     return (
-                      <div key={step} style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '12px 0', opacity: completed ? 1 : 0.45 }}>
+                      <div
+                        key={step}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '10px',
+                          margin: '12px 0', opacity: completed ? 1 : 0.45
+                        }}
+                      >
                         <span style={{
                           width: '25px', height: '25px', borderRadius: '50%',
                           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                           background: completed ? '#16a34a' : '#e5e7eb',
-                          color: completed ? '#fff' : '#4b5563', fontWeight: 800, flexShrink: 0
+                          color: completed ? '#fff' : '#4b5563',
+                          fontWeight: 800, flexShrink: 0
                         }}>{completed ? '✓' : index + 1}</span>
                         <b>{step}</b>
                       </div>
                     );
                   })}
                   {trackingOrder.status === 'Cancelled' && (
-                    <p style={{ color: '#b91c1c', fontWeight: 700 }}>This order has been cancelled.</p>
+                    <p style={{ color: '#b91c1c', fontWeight: 700 }}>
+                      This order has been cancelled.
+                    </p>
                   )}
                 </div>
               </div>
@@ -1311,28 +1616,79 @@ export default function App() {
               <h2>Set new password</h2>
               <p>Enter and confirm your new owner password.</p>
               <form onSubmit={saveRecoveredPassword}>
-                <label>New password<input type="password" minLength={6} required value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label>
-                <label>Confirm new password<input type="password" minLength={6} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label>
-                <button className="primary full" disabled={loading}>{loading ? 'Updating...' : 'Update password'}</button>
+                <label>
+                  New password
+                  <input
+                    type="password" minLength={6} required
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Confirm new password
+                  <input
+                    type="password" minLength={6} required
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                  />
+                </label>
+                <button className="primary full" disabled={loading}>
+                  {loading ? 'Updating...' : 'Update password'}
+                </button>
               </form>
             </div>
           ) : !owner ? (
             <div className="loginbox">
               <span className="eyebrow">OWNER ACCESS</span>
               <h2>{resetMode ? 'Reset password' : 'Welcome back'}</h2>
-              <p>{resetMode ? 'Enter your owner email and we will send a reset link.' : 'Sign in to manage products and customer orders.'}</p>
+              <p>
+                {resetMode
+                  ? 'Enter your owner email and we will send a reset link.'
+                  : 'Sign in to manage products and customer orders.'}
+              </p>
+
               {resetMode ? (
                 <form onSubmit={sendPasswordReset}>
-                  <label>Email<input type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)} /></label>
-                  <button className="primary full" disabled={loading}>{loading ? 'Sending...' : 'Send reset email'}</button>
-                  <button type="button" className="secondary full" onClick={() => setResetMode(false)}>Back to sign in</button>
+                  <label>
+                    Email
+                    <input
+                      type="email" required
+                      value={loginEmail}
+                      onChange={e => setLoginEmail(e.target.value)}
+                    />
+                  </label>
+                  <button className="primary full" disabled={loading}>
+                    {loading ? 'Sending...' : 'Send reset email'}
+                  </button>
+                  <button
+                    type="button" className="secondary full"
+                    onClick={() => setResetMode(false)}
+                  >Back to sign in</button>
                 </form>
               ) : (
                 <form onSubmit={signIn}>
-                  <label>Email<input type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)} /></label>
-                  <label>Password<input type="password" required value={loginPassword} onChange={e => setLoginPassword(e.target.value)} /></label>
+                  <label>
+                    Email
+                    <input
+                      type="email" required
+                      value={loginEmail}
+                      onChange={e => setLoginEmail(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Password
+                    <input
+                      type="password" required
+                      value={loginPassword}
+                      onChange={e => setLoginPassword(e.target.value)}
+                    />
+                  </label>
                   <button className="primary full">Sign in</button>
-                  <button type="button" className="secondary full" onClick={() => setResetMode(true)} style={{ marginTop: '10px' }}>Forgot password?</button>
+                  <button
+                    type="button" className="secondary full"
+                    onClick={() => setResetMode(true)}
+                    style={{ marginTop: '10px' }}
+                  >Forgot password?</button>
                 </form>
               )}
               <small>Owner account is created in Supabase during setup.</small>
@@ -1356,19 +1712,16 @@ export default function App() {
                   <b>{money(totalSales)}</b>
                   <small>Excluding cancelled orders</small>
                 </div>
-
                 <div>
                   <small><CalendarDays size={14} /> Today's Orders</small>
                   <b>{todayOrders.length}</b>
                   <small>Orders received today</small>
                 </div>
-
                 <div>
                   <small><Clock size={14} /> Pending Orders</small>
                   <b>{pendingOrders.length}</b>
                   <small>Awaiting completion</small>
                 </div>
-
                 <div>
                   <small><CheckCircle size={14} /> Delivered Orders</small>
                   <b>{deliveredOrders.length}</b>
@@ -1377,29 +1730,16 @@ export default function App() {
               </div>
 
               <div className="stats">
-                <div>
-                  <small>Products</small>
-                  <b>{products.length}</b>
-                </div>
-                <div>
-                  <small>Orders</small>
-                  <b>{orders.length}</b>
-                </div>
-                <div>
-                  <small>New orders</small>
-                  <b>{orders.filter(o => o.status === 'New').length}</b>
-                </div>
+                <div><small>Products</small><b>{products.length}</b></div>
+                <div><small>Orders</small><b>{orders.length}</b></div>
+                <div><small>New orders</small><b>{orders.filter(o => o.status === 'New').length}</b></div>
                 <div>
                   <small>Low stock</small>
-                  <b style={{ color: lowStockCount > 0 ? '#b45309' : 'inherit' }}>
-                    {lowStockCount}
-                  </b>
+                  <b style={{ color: lowStockCount > 0 ? '#b45309' : 'inherit' }}>{lowStockCount}</b>
                 </div>
                 <div>
                   <small>Out of stock</small>
-                  <b style={{ color: outOfStockCount > 0 ? '#dc2626' : 'inherit' }}>
-                    {outOfStockCount}
-                  </b>
+                  <b style={{ color: outOfStockCount > 0 ? '#dc2626' : 'inherit' }}>{outOfStockCount}</b>
                 </div>
               </div>
 
@@ -1410,27 +1750,23 @@ export default function App() {
                 <button
                   className={adminTab === 'products' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('products')}
-                >
-                  <Package size={16} /> Products
-                </button>
+                ><Package size={16} /> Products</button>
+
                 <button
                   className={adminTab === 'orders' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('orders')}
-                >
-                  <ClipboardList size={16} /> Orders
-                </button>
+                ><ClipboardList size={16} /> Orders</button>
+
                 <button
                   className={adminTab === 'neworder' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('neworder')}
-                >
-                  <Plus size={16} /> New Order
-                </button>
+                ><Plus size={16} /> New Order</button>
+
                 <button
                   className={adminTab === 'settings' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('settings')}
-                >
-                  Change Password
-                </button>
+                >Change Password</button>
+
                 <button
                   className={adminTab === 'lowstock' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('lowstock')}
@@ -1438,29 +1774,21 @@ export default function App() {
                   <AlertTriangle size={16} /> Stock Alerts
                   {lowStockCount + outOfStockCount > 0 && (
                     <span style={{
-                      marginLeft: '5px',
-                      background: '#dc2626',
-                      color: 'white',
-                      borderRadius: '20px',
-                      padding: '2px 7px',
-                      fontSize: '11px'
-                    }}>
-                      {lowStockCount + outOfStockCount}
-                    </span>
+                      marginLeft: '5px', background: '#dc2626', color: 'white',
+                      borderRadius: '20px', padding: '2px 7px', fontSize: '11px'
+                    }}>{lowStockCount + outOfStockCount}</span>
                   )}
                 </button>
+
                 <button
                   className={adminTab === 'discounts' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('discounts')}
-                >
-                  <TrendingUp size={16} /> Discounts
-                </button>
+                ><TrendingUp size={16} /> Discounts</button>
+
                 <button
                   className={adminTab === 'reports' ? 'primary' : 'secondary'}
                   onClick={() => setAdminTab('reports')}
-                >
-                  <TrendingUp size={16} /> Sales & Profit Reports
-                </button>
+                ><TrendingUp size={16} /> Sales & Profit Reports</button>
               </div>
 
               {adminTab === 'settings' && (
@@ -1468,10 +1796,26 @@ export default function App() {
                   <h3>Change owner password</h3>
                   <p className="muted">Confirm your current password, then choose a new password.</p>
                   <form className="checkout" onSubmit={changeOwnerPassword}>
-                    <input type="password" required placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} />
-                    <input type="password" required minLength={6} placeholder="New password (at least 6 characters)" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
-                    <input type="password" required minLength={6} placeholder="Confirm new password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
-                    <button className="primary full" disabled={loading}>{loading ? 'Updating...' : 'Change password'}</button>
+                    <input
+                      type="password" required placeholder="Current password"
+                      value={currentPassword}
+                      onChange={e => setCurrentPassword(e.target.value)}
+                    />
+                    <input
+                      type="password" required minLength={6}
+                      placeholder="New password (at least 6 characters)"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                    />
+                    <input
+                      type="password" required minLength={6}
+                      placeholder="Confirm new password"
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
+                    />
+                    <button className="primary full" disabled={loading}>
+                      {loading ? 'Updating...' : 'Change password'}
+                    </button>
                   </form>
                 </div>
               )}
@@ -1479,9 +1823,7 @@ export default function App() {
               {adminTab === 'lowstock' && (
                 <div className="panel">
                   <h3><AlertTriangle size={18} /> Stock alerts</h3>
-                  <p className="muted">
-                    Products with 2 or fewer units remaining are shown here.
-                  </p>
+                  <p className="muted">Products with 2 or fewer units remaining are shown here.</p>
 
                   {lowStockProducts.length === 0 && outOfStockProducts.length === 0 ? (
                     <div className="empty">
@@ -1498,32 +1840,19 @@ export default function App() {
                           </h3>
                           {outOfStockProducts.map(p => (
                             <div className="manage-row" key={p.id}>
-                              {p.image_url ? (
-                                <img
-                                  src={p.image_url}
-                                  alt={p.name}
-                                  style={{
-                                    width: '55px',
-                                    height: '55px',
-                                    objectFit: 'cover',
-                                    borderRadius: '8px'
-                                  }}
-                                />
-                              ) : <ImagePlus size={25} />}
+                              {p.image_url
+                                ? <img src={p.image_url} alt={p.name} style={{
+                                    width: '55px', height: '55px', objectFit: 'cover', borderRadius: '8px'
+                                  }} />
+                                : <ImagePlus size={25} />}
                               <span style={{ flex: 1 }}>
-                                <b>{p.name}</b>
-                                <small>{money(p.price)}</small>
+                                <b>{p.name}</b><small>{money(p.price)}</small>
                               </span>
                               {stockBadge(p.stock)}
                               <button
                                 className="secondary"
-                                onClick={() => {
-                                  setAdminTab('products');
-                                  startEditProduct(p);
-                                }}
-                              >
-                                <Edit2 size={16} /> Edit
-                              </button>
+                                onClick={() => { setAdminTab('products'); startEditProduct(p); }}
+                              ><Edit2 size={16} /> Edit</button>
                             </div>
                           ))}
                         </>
@@ -1536,32 +1865,19 @@ export default function App() {
                           </h3>
                           {lowStockProducts.map(p => (
                             <div className="manage-row" key={p.id}>
-                              {p.image_url ? (
-                                <img
-                                  src={p.image_url}
-                                  alt={p.name}
-                                  style={{
-                                    width: '55px',
-                                    height: '55px',
-                                    objectFit: 'cover',
-                                    borderRadius: '8px'
-                                  }}
-                                />
-                              ) : <ImagePlus size={25} />}
+                              {p.image_url
+                                ? <img src={p.image_url} alt={p.name} style={{
+                                    width: '55px', height: '55px', objectFit: 'cover', borderRadius: '8px'
+                                  }} />
+                                : <ImagePlus size={25} />}
                               <span style={{ flex: 1 }}>
-                                <b>{p.name}</b>
-                                <small>{money(p.price)}</small>
+                                <b>{p.name}</b><small>{money(p.price)}</small>
                               </span>
                               {stockBadge(p.stock)}
                               <button
                                 className="secondary"
-                                onClick={() => {
-                                  setAdminTab('products');
-                                  startEditProduct(p);
-                                }}
-                              >
-                                <Edit2 size={16} /> Edit
-                              </button>
+                                onClick={() => { setAdminTab('products'); startEditProduct(p); }}
+                              ><Edit2 size={16} /> Edit</button>
                             </div>
                           ))}
                         </>
@@ -1580,104 +1896,69 @@ export default function App() {
                     </h3>
 
                     {editingProduct && (
-                      <p className="muted">
-                        Editing product: <b>{editingProduct.name}</b>
-                      </p>
+                      <p className="muted">Editing product: <b>{editingProduct.name}</b></p>
                     )}
 
                     <form className="productform" onSubmit={addProduct}>
                       <input
-                        required
-                        placeholder="Product name"
+                        required placeholder="Product name"
                         value={newProduct.name}
                         onChange={e => setNewProduct({ ...newProduct, name: e.target.value })}
                       />
-
                       <input
                         placeholder="Description"
                         value={newProduct.description}
                         onChange={e => setNewProduct({ ...newProduct, description: e.target.value })}
                       />
-
                       <input
-                        required
-                        type="number"
-                        min="0"
-                        placeholder="Price (Rs.)"
+                        required type="number" min="0" placeholder="Price (Rs.)"
                         value={newProduct.price}
                         onChange={e => setNewProduct({ ...newProduct, price: e.target.value })}
                       />
-
                       <input
-                        required
-                        type="number"
-                        min="0"
-                        step="0.01"
+                        required type="number" min="0" step="0.01"
                         placeholder="Cost Price / Purchase Price (Rs.)"
                         value={newProduct.cost_price}
                         onChange={e => setNewProduct({ ...newProduct, cost_price: e.target.value })}
                       />
-
                       <input
-                        required
-                        type="number"
-                        min="0"
-                        step="1"
+                        required type="number" min="0" step="1"
                         placeholder="Stock quantity"
                         value={newProduct.stock}
                         onChange={e => setNewProduct({ ...newProduct, stock: e.target.value })}
                       />
 
-                      <label
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '8px',
-                          padding: '12px',
-                          border: '1px dashed #c9a6b5',
-                          borderRadius: '10px'
-                        }}
-                      >
+                      <label style={{
+                        display: 'flex', flexDirection: 'column', gap: '8px',
+                        padding: '12px', border: '1px dashed #c9a6b5', borderRadius: '10px'
+                      }}>
                         <span>
                           <ImagePlus size={18} style={{ verticalAlign: 'middle', marginRight: '7px' }} />
                           {editingProduct ? 'Change product photo (optional)' : 'Product photo'}
                         </span>
-
                         <input
-                          id="product-image-input"
-                          type="file"
+                          id="product-image-input" type="file"
                           accept="image/jpeg,image/png,image/webp"
                           onChange={handleImageSelect}
                         />
-
                         <small>JPG, PNG or WEBP · Maximum 5 MB</small>
-
                         {editingProduct?.image_url && !selectedImage && (
                           <small>You can keep the existing photo without changing it.</small>
                         )}
-
                         {selectedImage && (
-                          <small style={{ color: 'green' }}>
-                            Selected: {selectedImage.name}
-                          </small>
+                          <small style={{ color: 'green' }}>Selected: {selectedImage.name}</small>
                         )}
                       </label>
 
                       <button className="primary" disabled={loading}>
-                        {loading
-                          ? 'Saving...'
-                          : editingProduct ? 'Update product' : 'Save product'}
+                        {loading ? 'Saving...' : editingProduct ? 'Update product' : 'Save product'}
                       </button>
 
                       {editingProduct && (
                         <button
-                          type="button"
-                          className="secondary"
-                          onClick={resetProductForm}
-                          disabled={loading}
-                        >
-                          <X size={16} /> Cancel editing
-                        </button>
+                          type="button" className="secondary"
+                          onClick={resetProductForm} disabled={loading}
+                        ><X size={16} /> Cancel editing</button>
                       )}
                     </form>
                   </div>
@@ -1690,64 +1971,41 @@ export default function App() {
                     ) : (
                       products.map(p => (
                         <div
-                          className="manage-row"
-                          key={p.id}
+                          className="manage-row" key={p.id}
                           style={{ gap: '12px', alignItems: 'center' }}
                         >
-                          {p.image_url ? (
-                            <img
-                              src={p.image_url}
-                              alt={p.name}
-                              style={{
-                                width: '55px',
-                                height: '55px',
-                                objectFit: 'cover',
-                                borderRadius: '8px'
-                              }}
-                            />
-                          ) : (
-                            <ImagePlus size={25} />
-                          )}
+                          {p.image_url
+                            ? <img src={p.image_url} alt={p.name} style={{
+                                width: '55px', height: '55px', objectFit: 'cover', borderRadius: '8px'
+                              }} />
+                            : <ImagePlus size={25} />}
 
                           <span style={{ flex: 1 }}>
                             <b>{p.name}</b>
                             <small>Selling: {money(p.price)} · Cost: {money(p.cost_price)}</small>
-                            <div style={{ marginTop: '5px' }}>
-                              {stockBadge(p.stock)}
-                            </div>
+                            <div style={{ marginTop: '5px' }}>{stockBadge(p.stock)}</div>
                           </span>
 
                           <label>
                             Stock
                             <input
-                              type="number"
-                              min="0"
-                              value={p.stock}
+                              type="number" min="0" value={p.stock}
                               onChange={e => {
                                 const value = e.target.value;
-                                setProducts(old =>
-                                  old.map(item =>
-                                    item.id === p.id ? { ...item, stock: value } : item
-                                  )
-                                );
+                                setProducts(old => old.map(item =>
+                                  item.id === p.id ? { ...item, stock: value } : item
+                                ));
                               }}
                               onBlur={e => updateStock(p.id, e.target.value)}
                             />
                           </label>
 
                           <button
-                            className="secondary"
-                            type="button"
-                            onClick={() => startEditProduct(p)}
-                            title="Edit product"
-                          >
-                            <Edit2 size={16} /> Edit
-                          </button>
+                            className="secondary" type="button"
+                            onClick={() => startEditProduct(p)} title="Edit product"
+                          ><Edit2 size={16} /> Edit</button>
 
-                          <button
-                            className="textdanger"
-                            onClick={() => deactivateProduct(p.id)}
-                          >
+                          <button className="textdanger" onClick={() => deactivateProduct(p.id)}>
                             Remove
                           </button>
                         </div>
@@ -1760,25 +2018,118 @@ export default function App() {
               {adminTab === 'discounts' && (
                 <div className="panel">
                   <h3>Discount offers</h3>
-                  <p className="muted">Create a percentage or fixed-value offer. Only one offer can be active at a time.</p>
+                  <p className="muted">
+                    Create discounts for individual products or select All Products for a global discount.
+                    A product-specific discount takes priority over the global discount.
+                  </p>
+
                   <form className="productform" onSubmit={saveDiscount}>
-                    <input required placeholder="Discount name" value={discountForm.name} onChange={e => setDiscountForm({ ...discountForm, name: e.target.value })} />
-                    <select value={discountForm.discount_type} onChange={e => setDiscountForm({ ...discountForm, discount_type: e.target.value })}>
-                      <option value="percentage">Percentage (%)</option><option value="fixed">Fixed amount (Rs.)</option>
+                    <input
+                      required placeholder="Discount name"
+                      value={discountForm.name}
+                      onChange={e => setDiscountForm({ ...discountForm, name: e.target.value })}
+                    />
+
+                    <select
+                      value={discountForm.product_id}
+                      onChange={e => setDiscountForm({ ...discountForm, product_id: e.target.value })}
+                    >
+                      <option value="">All Products (Global Discount)</option>
+                      {products.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
                     </select>
-                    <input required type="number" min="0.01" step="0.01" placeholder={discountForm.discount_type === 'percentage' ? 'Discount percentage' : 'Discount amount (Rs.)'} value={discountForm.discount_value} onChange={e => setDiscountForm({ ...discountForm, discount_value: e.target.value })} />
-                    <button className="primary" disabled={loading}>{editingDiscount ? 'Update discount' : 'Save discount'}</button>
-                    {editingDiscount && <button type="button" className="secondary" onClick={() => { setEditingDiscount(null); setDiscountForm({ name: '', discount_type: 'percentage', discount_value: '' }); }}>Cancel edit</button>}
+
+                    <select
+                      value={discountForm.discount_type}
+                      onChange={e => setDiscountForm({ ...discountForm, discount_type: e.target.value })}
+                    >
+                      <option value="percentage">Percentage (%)</option>
+                      <option value="fixed">Fixed amount (Rs.)</option>
+                    </select>
+
+                    <input
+                      required type="number" min="0.01" step="0.01"
+                      max={discountForm.discount_type === 'percentage' ? 100 : undefined}
+                      placeholder={
+                        discountForm.discount_type === 'percentage'
+                          ? 'Discount percentage (maximum 100)'
+                          : 'Discount amount (Rs.)'
+                      }
+                      value={discountForm.discount_value}
+                      onChange={e => setDiscountForm({
+                        ...discountForm, discount_value: e.target.value
+                      })}
+                    />
+
+                    <button className="primary" disabled={loading}>
+                      {editingDiscount ? 'Update discount' : 'Save discount'}
+                    </button>
+
+                    {editingDiscount && (
+                      <button
+                        type="button" className="secondary"
+                        onClick={resetDiscountForm}
+                      >Cancel edit</button>
+                    )}
                   </form>
-                  {discounts.length === 0 ? <p className="muted">No discounts created yet.</p> : discounts.map(d => (
-                    <div className="manage-row" key={d.id}>
-                      <span style={{ flex: 1 }}><b>{d.name}</b><small>{d.discount_type === 'percentage' ? `${d.discount_value}% off` : `${money(d.discount_value)} off`}</small></span>
-                      <b style={{ color: d.active ? '#15803d' : '#777' }}>{d.active ? 'ACTIVE' : 'OFF'}</b>
-                      <button type="button" className="secondary" disabled={loading} onClick={() => toggleDiscount(d)}>{d.active ? 'Turn off' : 'Activate'}</button>
-                      <button type="button" className="secondary" onClick={() => { setEditingDiscount(d); setDiscountForm({ name: d.name || '', discount_type: d.discount_type || 'percentage', discount_value: String(d.discount_value ?? '') }); }}>Edit</button>
-                      <button type="button" className="textdanger" onClick={() => deleteDiscount(d.id)}>Delete</button>
-                    </div>
-                  ))}
+
+                  <h3 style={{ marginTop: '25px' }}>Saved discounts</h3>
+
+                  {discounts.length === 0 ? (
+                    <p className="muted">No discounts created yet.</p>
+                  ) : (
+                    discounts.map(d => {
+                      const linkedProduct = products.find(
+                        p => String(p.id) === String(d.product_id)
+                      );
+
+                      return (
+                        <div className="manage-row" key={d.id}>
+                          <span style={{ flex: 1 }}>
+                            <b>{d.name}</b>
+                            <small>
+                              {d.product_id
+                                ? `Product: ${linkedProduct?.name || 'Linked product'}`
+                                : 'All Products (Global)'}
+                            </small>
+                            <small>
+                              {d.discount_type === 'percentage'
+                                ? `${d.discount_value}% off`
+                                : `${money(d.discount_value)} off`}
+                            </small>
+                          </span>
+
+                          <b style={{ color: d.active ? '#15803d' : '#777' }}>
+                            {d.active ? 'ACTIVE' : 'OFF'}
+                          </b>
+
+                          <button
+                            type="button" className="secondary" disabled={loading}
+                            onClick={() => toggleDiscount(d)}
+                          >{d.active ? 'Turn off' : 'Activate'}</button>
+
+                          <button
+                            type="button" className="secondary"
+                            onClick={() => {
+                              setEditingDiscount(d);
+                              setDiscountForm({
+                                name: d.name || '',
+                                discount_type: d.discount_type || 'percentage',
+                                discount_value: String(d.discount_value ?? ''),
+                                product_id: d.product_id || ''
+                              });
+                            }}
+                          >Edit</button>
+
+                          <button
+                            type="button" className="textdanger"
+                            onClick={() => deleteDiscount(d.id)}
+                          >Delete</button>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               )}
 
@@ -1786,7 +2137,8 @@ export default function App() {
                 <div className="panel">
                   <h3><TrendingUp size={18} /> Sales & Profit Reports</h3>
                   <p className="muted">
-                    Reports exclude cancelled orders. Net sales are product sales after discounts. Product cost is deducted to calculate actual profit. Delivery fees are not included.
+                    Reports exclude cancelled orders. Net sales are product sales after discounts.
+                    Product cost is deducted to calculate actual profit. Delivery fees are not included.
                   </p>
 
                   <div className="stats">
@@ -1825,46 +2177,69 @@ export default function App() {
                     }}>
                       <b>Cost price needs attention</b>
                       <p style={{ margin: '5px 0 0' }}>
-                        {itemsWithoutCost} order item(s) have a zero cost price. Actual profit may be overstated until their cost details are corrected. Older orders created before cost tracking usually appear here.
+                        {itemsWithoutCost} order item(s) have a zero cost price.
+                        Actual profit may be overstated until their cost details are corrected.
+                        Older orders created before cost tracking usually appear here.
                       </p>
                     </div>
                   )}
 
-                  <h3 style={{ marginTop: '28px' }}><CalendarDays size={18} /> Monthly Net Sales</h3>
+                  <h3 style={{ marginTop: '28px' }}>
+                    <CalendarDays size={18} /> Monthly Net Sales
+                  </h3>
+
                   {monthlySales.map(month => (
                     <div key={month.key} style={{ margin: '14px 0' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '6px' }}>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between',
+                        gap: '12px', marginBottom: '6px'
+                      }}>
                         <b>{month.label}</b>
                         <span>{money(month.revenue)} · {month.orders} order(s)</span>
                       </div>
-                      <div style={{ height: '10px', borderRadius: '20px', background: '#f1e8eb', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '10px', borderRadius: '20px',
+                        background: '#f1e8eb', overflow: 'hidden'
+                      }}>
                         <div style={{
-                          height: '100%', width: `${(month.revenue / maxMonthlySales) * 100}%`,
+                          height: '100%',
+                          width: `${(month.revenue / maxMonthlySales) * 100}%`,
                           borderRadius: '20px', background: '#945c70'
                         }} />
                       </div>
                     </div>
                   ))}
 
-                  <h3 style={{ marginTop: '28px' }}><Package size={18} /> Best Selling Products</h3>
+                  <h3 style={{ marginTop: '28px' }}>
+                    <Package size={18} /> Best Selling Products
+                  </h3>
+
                   {bestSellingProducts.length === 0 ? (
                     <p className="muted">No sales data available yet.</p>
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                      <table style={{
+                        width: '100%', borderCollapse: 'collapse', textAlign: 'left'
+                      }}>
                         <thead>
                           <tr>
                             <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Product</th>
                             <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Units sold</th>
-                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Gross Product Sales</th>
+                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Net Product Sales</th>
                           </tr>
                         </thead>
                         <tbody>
                           {bestSellingProducts.map((product, index) => (
                             <tr key={`${product.name}-${index}`}>
-                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>{product.name}</td>
-                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>{product.quantity}</td>
-                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>{money(product.revenue)}</td>
+                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>
+                                {product.name}
+                              </td>
+                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>
+                                {product.quantity}
+                              </td>
+                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>
+                                {money(product.revenue)}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1881,59 +2256,104 @@ export default function App() {
                   {orders.length === 0 ? (
                     <p className="muted">No orders yet.</p>
                   ) : (
-                    orders.map(o => (
-                      <div className="order" key={o.id}>
-                        <div className="orderhead">
-                          <b>#{o.id.slice(0, 8).toUpperCase()} · {o.customer_name}</b>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                            <button type="button" className="secondary" onClick={() => openOrderWhatsApp(o)}>
-                              WhatsApp Customer
-                            </button>
-                            <button type="button" className="secondary" onClick={() => printOrderReceipt(o)}>
-                              Print / Save PDF
-                            </button>
-                            <select
-                            value={o.status}
-                            disabled={loading || o.status === 'Cancelled'}
-                            onChange={e => updateOrder(o.id, e.target.value)}
-                          >
-                            <option>New</option>
-                            <option>Accepted</option>
-                            <option>Packed</option>
-                            <option>Dispatched</option>
-                            <option>Delivered</option>
-                            <option>Cancelled</option>
-                            </select>
+                    orders.map(o => {
+                      const orderDiscount = getOrderDiscountTotal(o);
+                      const itemDiscountsExist = hasItemDiscountData(o);
+
+                      return (
+                        <div className="order" key={o.id}>
+                          <div className="orderhead">
+                            <b>#{o.id.slice(0, 8).toUpperCase()} · {o.customer_name}</b>
+                            <div style={{
+                              display: 'flex', alignItems: 'center',
+                              gap: '8px', flexWrap: 'wrap'
+                            }}>
+                              <button
+                                type="button" className="secondary"
+                                onClick={() => openOrderWhatsApp(o)}
+                              >WhatsApp Customer</button>
+
+                              <button
+                                type="button" className="secondary"
+                                onClick={() => printOrderReceipt(o)}
+                              >Print / Save PDF</button>
+
+                              <select
+                                value={o.status}
+                                disabled={loading || o.status === 'Cancelled'}
+                                onChange={e => updateOrder(o.id, e.target.value)}
+                              >
+                                <option>New</option>
+                                <option>Accepted</option>
+                                <option>Packed</option>
+                                <option>Dispatched</option>
+                                <option>Delivered</option>
+                                <option>Cancelled</option>
+                              </select>
+                            </div>
                           </div>
-                        </div>
 
-                        {(() => {
-                          const orderDateTime = formatOrderDateTime(o.created_at);
-                          return (
-                            <p style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
-                              <span><CalendarDays size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Date: <b>{orderDateTime.date}</b></span>
-                              <span><Clock size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Time: <b>{orderDateTime.time}</b></span>
+                          {(() => {
+                            const orderDateTime = formatOrderDateTime(o.created_at);
+                            return (
+                              <p style={{
+                                display: 'flex', gap: '14px',
+                                flexWrap: 'wrap', alignItems: 'center'
+                              }}>
+                                <span>
+                                  <CalendarDays size={14} style={{
+                                    verticalAlign: 'middle', marginRight: '5px'
+                                  }} />
+                                  Date: <b>{orderDateTime.date}</b>
+                                </span>
+                                <span>
+                                  <Clock size={14} style={{
+                                    verticalAlign: 'middle', marginRight: '5px'
+                                  }} />
+                                  Time: <b>{orderDateTime.time}</b>
+                                </span>
+                              </p>
+                            );
+                          })()}
+
+                          <p>{o.phone} · {o.address}</p>
+                          <p>
+                            Delivery: <b>{o.delivery_method === 'post' ? 'Post Office' : 'Courier'}</b>
+                            {' '}({money(o.delivery_fee)}) · Payment:
+                            {' '}<b>{o.payment_method === 'cod' ? 'COD' : 'Bank Transfer'}</b>
+                          </p>
+
+                          {orderDiscount > 0 && (
+                            <p>
+                              Total Discount: <b style={{ color: '#15803d' }}>
+                                -{money(orderDiscount)}
+                              </b>
+                              {!itemDiscountsExist && ` (${o.discount_name || 'Offer'})`}
                             </p>
-                          );
-                        })()}
+                          )}
 
-                        <p>{o.phone} · {o.address}</p>
-                        <p>
-                          Delivery: <b>{o.delivery_method === 'post' ? 'Post Office' : 'Courier'}</b>
-                          {' '}({money(o.delivery_fee)}) · Payment:
-                          {' '}<b>{o.payment_method === 'cod' ? 'COD' : 'Bank Transfer'}</b>
-                        </p>
-                        {Number(o.discount_amount || 0) > 0 && <p>Discount: <b>{o.discount_name || 'Offer'} (-{money(o.discount_amount)})</b></p>}
-                        <p>Total: <b>{money(o.total)}</b> · {o.payment_status}</p>
+                          <p>Total: <b>{money(o.total)}</b> · {o.payment_status}</p>
 
-                        {(o.order_items || []).map(i => (
-                          <small key={i.id}>
-                            {i.product_name} × {i.quantity} — {money(i.line_total)}
-                            <br />
-                          </small>
-                        ))}
-                      </div>
-                    ))
+                          {(o.order_items || []).map(i => {
+                            const gross = Number(i.line_total || 0);
+                            const itemDiscount = Number(i.discount_amount || 0);
+                            const net = Math.max(0, gross - itemDiscount);
+
+                            return (
+                              <small key={i.id}>
+                                {i.product_name} × {i.quantity} — {money(net)}
+                                {itemDiscount > 0 && (
+                                  <span style={{ color: '#15803d' }}>
+                                    {' '}(Discount: -{money(itemDiscount)})
+                                  </span>
+                                )}
+                                <br />
+                              </small>
+                            );
+                          })}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               )}
@@ -1946,20 +2366,17 @@ export default function App() {
                     <h3>Customer details</h3>
 
                     <input
-                      required
-                      placeholder="Customer full name"
+                      required placeholder="Customer full name"
                       value={manualForm.name}
                       onChange={e => setManualForm({ ...manualForm, name: e.target.value })}
                     />
                     <input
-                      required
-                      placeholder="Customer phone number"
+                      required placeholder="Customer phone number"
                       value={manualForm.phone}
                       onChange={e => setManualForm({ ...manualForm, phone: e.target.value })}
                     />
                     <textarea
-                      required
-                      placeholder="Customer delivery address"
+                      required placeholder="Customer delivery address"
                       value={manualForm.address}
                       onChange={e => setManualForm({ ...manualForm, address: e.target.value })}
                     />
@@ -1982,11 +2399,12 @@ export default function App() {
                           ))}
                         </select>
 
-                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{
+                          display: 'flex', gap: '10px',
+                          alignItems: 'center', flexWrap: 'wrap'
+                        }}>
                           <input
-                            type="number"
-                            min="1"
-                            step="1"
+                            type="number" min="1" step="1"
                             value={manualQty}
                             onChange={e => setManualQty(e.target.value)}
                             style={{ maxWidth: '120px' }}
@@ -1998,24 +2416,33 @@ export default function App() {
                       </>
                     )}
 
-                    {manualItems.length > 0 && (
+                    {manualLines.length > 0 && (
                       <div className="cartitems">
                         <h3>Order items</h3>
-                        {manualItems.map(p => (
+                        {manualLines.map(p => (
                           <div className="cartitem" key={p.id}>
                             <span>
                               <b>{p.name}</b>
                               <small>{money(p.price)} × {p.qty}</small>
+                              {p.discount_amount > 0 && (
+                                <small style={{ color: '#15803d' }}>
+                                  {p.discount?.name}: -{money(p.discount_amount)}
+                                </small>
+                              )}
                             </span>
-                            <b>{money(p.price * p.qty)}</b>
+                            <span style={{ textAlign: 'right' }}>
+                              {p.discount_amount > 0 && (
+                                <small style={{ textDecoration: 'line-through', color: '#888' }}>
+                                  {money(p.gross)}
+                                </small>
+                              )}
+                              <b>{money(p.net)}</b>
+                            </span>
                             <button
-                              type="button"
-                              className="textdanger"
+                              type="button" className="textdanger"
                               onClick={() => removeManualItem(p.id)}
                               title="Remove product"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            ><Trash2 size={16} /></button>
                           </div>
                         ))}
                       </div>
@@ -2025,8 +2452,7 @@ export default function App() {
                     <div className="choices">
                       <label>
                         <input
-                          type="radio"
-                          name="manualDelivery"
+                          type="radio" name="manualDelivery"
                           checked={manualForm.delivery === 'post'}
                           onChange={() => setManualForm({ ...manualForm, delivery: 'post' })}
                         />
@@ -2035,8 +2461,7 @@ export default function App() {
                       </label>
                       <label>
                         <input
-                          type="radio"
-                          name="manualDelivery"
+                          type="radio" name="manualDelivery"
                           checked={manualForm.delivery === 'courier'}
                           onChange={() => setManualForm({ ...manualForm, delivery: 'courier' })}
                         />
@@ -2049,8 +2474,7 @@ export default function App() {
                     <div className="choices">
                       <label>
                         <input
-                          type="radio"
-                          name="manualPayment"
+                          type="radio" name="manualPayment"
                           checked={manualForm.payment === 'cod'}
                           onChange={() => setManualForm({ ...manualForm, payment: 'cod' })}
                         />
@@ -2059,8 +2483,7 @@ export default function App() {
                       </label>
                       <label>
                         <input
-                          type="radio"
-                          name="manualPayment"
+                          type="radio" name="manualPayment"
                           checked={manualForm.payment === 'bank'}
                           onChange={() => setManualForm({ ...manualForm, payment: 'bank' })}
                         />
@@ -2078,13 +2501,21 @@ export default function App() {
 
                     <div className="totals">
                       <span>Items</span><b>{money(manualSubtotal)}</b>
-                      {manualDiscountAmount > 0 && <><span>{activeDiscount?.name || 'Discount'}</span><b style={{ color: '#15803d' }}>-{money(manualDiscountAmount)}</b></>}
+                      {manualDiscountAmount > 0 && (
+                        <>
+                          <span>Discount</span>
+                          <b style={{ color: '#15803d' }}>-{money(manualDiscountAmount)}</b>
+                        </>
+                      )}
                       <span>{manualForm.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
                       <b>{money(manualDeliveryFee)}</b>
                       <strong>Total</strong><strong>{money(manualTotal)}</strong>
                     </div>
 
-                    <button className="primary full" disabled={loading || manualItems.length === 0}>
+                    <button
+                      className="primary full"
+                      disabled={loading || manualItems.length === 0}
+                    >
                       {loading ? 'Creating order...' : 'Create Order'}
                     </button>
                   </form>
@@ -2111,18 +2542,32 @@ export default function App() {
             ) : (
               <>
                 <div className="cartitems">
-                  {cart.map(p => (
+                  {cartLines.map(p => (
                     <div className="cartitem" key={p.id}>
                       <span>
                         <b>{p.name}</b>
                         <small>{money(p.price)} each</small>
+                        {p.discount_amount > 0 && (
+                          <small style={{ color: '#15803d' }}>
+                            {p.discount?.name} · Discount: -{money(p.discount_amount)}
+                          </small>
+                        )}
                       </span>
+
                       <div className="qty">
                         <button onClick={() => changeQty(p.id, -1)}><Minus size={14} /></button>
                         {p.qty}
                         <button onClick={() => changeQty(p.id, 1)}><Plus size={14} /></button>
                       </div>
-                      <b>{money(p.price * p.qty)}</b>
+
+                      <span style={{ textAlign: 'right' }}>
+                        {p.discount_amount > 0 && (
+                          <small style={{ textDecoration: 'line-through', color: '#888' }}>
+                            {money(p.gross)}
+                          </small>
+                        )}
+                        <b>{money(p.net)}</b>
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -2132,8 +2577,7 @@ export default function App() {
                   <div className="choices">
                     <label>
                       <input
-                        type="radio"
-                        name="delivery"
+                        type="radio" name="delivery"
                         checked={form.delivery === 'post'}
                         onChange={() => setForm({ ...form, delivery: 'post' })}
                       />
@@ -2142,8 +2586,7 @@ export default function App() {
                     </label>
                     <label>
                       <input
-                        type="radio"
-                        name="delivery"
+                        type="radio" name="delivery"
                         checked={form.delivery === 'courier'}
                         onChange={() => setForm({ ...form, delivery: 'courier' })}
                       />
@@ -2156,8 +2599,7 @@ export default function App() {
                   <div className="choices">
                     <label>
                       <input
-                        type="radio"
-                        name="payment"
+                        type="radio" name="payment"
                         checked={form.payment === 'cod'}
                         onChange={() => setForm({ ...form, payment: 'cod' })}
                       />
@@ -2166,8 +2608,7 @@ export default function App() {
                     </label>
                     <label>
                       <input
-                        type="radio"
-                        name="payment"
+                        type="radio" name="payment"
                         checked={form.payment === 'bank'}
                         onChange={() => setForm({ ...form, payment: 'bank' })}
                       />
@@ -2178,20 +2619,17 @@ export default function App() {
 
                   <h3>Your details</h3>
                   <input
-                    required
-                    placeholder="Full name"
+                    required placeholder="Full name"
                     value={form.name}
                     onChange={e => setForm({ ...form, name: e.target.value })}
                   />
                   <input
-                    required
-                    placeholder="Phone number"
+                    required placeholder="Phone number"
                     value={form.phone}
                     onChange={e => setForm({ ...form, phone: e.target.value })}
                   />
                   <textarea
-                    required
-                    placeholder="Delivery address"
+                    required placeholder="Delivery address"
                     value={form.address}
                     onChange={e => setForm({ ...form, address: e.target.value })}
                   />
@@ -2203,7 +2641,12 @@ export default function App() {
 
                   <div className="totals">
                     <span>Items</span><b>{money(subtotal)}</b>
-                    {discountAmount > 0 && <><span>{activeDiscount?.name || 'Discount'}</span><b style={{ color: '#15803d' }}>-{money(discountAmount)}</b></>}
+                    {discountAmount > 0 && (
+                      <>
+                        <span>Discount</span>
+                        <b style={{ color: '#15803d' }}>-{money(discountAmount)}</b>
+                      </>
+                    )}
                     <span>{form.delivery === 'post' ? 'Post Office' : 'Courier'}</span>
                     <b>{money(deliveryFee)}</b>
                     <strong>Total</strong><strong>{money(total)}</strong>
