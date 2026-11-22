@@ -40,6 +40,101 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const LOW_STOCK_LIMIT = 2;
 
+function escapeReceiptHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+function printOrderReceipt(order) {
+  const printWindow = window.open('', '_blank', 'width=800,height=900');
+  if (!printWindow) {
+    alert('Please allow pop-ups to print or save the receipt.');
+    return;
+  }
+
+  const dateTime = formatOrderDateTime(order.created_at);
+  const items = (order.order_items || []).map(item => `
+    <tr>
+      <td>${escapeReceiptHtml(item.product_name || 'Product')}</td>
+      <td class="center">${Number(item.quantity || 0)}</td>
+      <td class="right">${money(item.line_total)}</td>
+    </tr>
+  `).join('');
+  const orderNumber = order.order_code || order.id?.slice(0, 8).toUpperCase() || '';
+  const deliveryName = order.delivery_method === 'post' ? 'Post Office' : 'Courier';
+  const paymentName = order.payment_method === 'cod' ? 'Cash on Delivery' : 'Bank Transfer';
+
+  printWindow.document.write(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Glamour Store Receipt - ${escapeReceiptHtml(orderNumber)}</title>
+<style>
+  *{box-sizing:border-box} body{font-family:Arial,sans-serif;color:#222;margin:0;padding:32px}
+  .receipt{max-width:720px;margin:auto}.brand{text-align:center;border-bottom:2px solid #945c70;padding-bottom:18px}
+  h1{color:#945c70;margin:0 0 6px;font-size:30px}.muted{color:#666;font-size:13px}
+  .meta{display:flex;justify-content:space-between;gap:20px;margin:22px 0}.meta p{margin:6px 0}
+  table{width:100%;border-collapse:collapse;margin:18px 0}th,td{padding:11px 8px;border-bottom:1px solid #ddd;text-align:left}
+  th{background:#f7f0f3}.center{text-align:center}.right{text-align:right}
+  .totals{margin-left:auto;width:min(100%,300px)}.totalrow{display:flex;justify-content:space-between;padding:7px 0}
+  .grand{font-size:19px;font-weight:bold;border-top:2px solid #945c70;margin-top:6px;padding-top:12px}
+  .footer{text-align:center;border-top:1px solid #ddd;margin-top:30px;padding-top:18px;color:#666;font-size:13px}
+  @media print{body{padding:10mm}.no-print{display:none}}
+</style></head><body><main class="receipt">
+  <header class="brand"><h1>Glamour Store</h1><div class="muted">Customer Receipt</div></header>
+  <section class="meta"><div><p><b>Receipt No:</b> ${escapeReceiptHtml(orderNumber)}</p><p><b>Date:</b> ${escapeReceiptHtml(dateTime.date)}</p><p><b>Time:</b> ${escapeReceiptHtml(dateTime.time)}</p></div>
+  <div><p><b>Customer:</b> ${escapeReceiptHtml(order.customer_name)}</p><p><b>Phone:</b> ${escapeReceiptHtml(order.phone)}</p><p><b>Address:</b> ${escapeReceiptHtml(order.address)}</p></div></section>
+  <table><thead><tr><th>Product</th><th class="center">Qty</th><th class="right">Amount</th></tr></thead><tbody>${items}</tbody></table>
+  <section class="totals"><div class="totalrow"><span>Delivery (${escapeReceiptHtml(deliveryName)})</span><b>${money(order.delivery_fee)}</b></div>
+  <div class="totalrow"><span>Payment</span><b>${escapeReceiptHtml(paymentName)}</b></div>
+  <div class="totalrow"><span>Payment status</span><b>${escapeReceiptHtml(order.payment_status || 'Pending')}</b></div>
+  <div class="totalrow grand"><span>Total</span><span>${money(order.total)}</span></div></section>
+  ${order.note ? `<p><b>Note:</b> ${escapeReceiptHtml(order.note)}</p>` : ''}
+  <footer class="footer">Thank you for shopping with Glamour Store!</footer>
+  <p class="no-print" style="text-align:center;margin-top:24px"><button onclick="window.print()">Print / Save as PDF</button></p>
+</main><script>window.onload=()=>window.print();</script></body></html>`);
+  printWindow.document.close();
+}
+
+function openOrderWhatsApp(order) {
+  let phone = String(order.phone || '').replace(/\D/g, '');
+
+  if (phone.startsWith('00')) phone = phone.slice(2);
+  if (phone.startsWith('0')) phone = `94${phone.slice(1)}`;
+  else if (!phone.startsWith('94')) phone = `94${phone}`;
+
+  if (!/^94\d{9}$/.test(phone)) {
+    alert('Please check the customer phone number. Use a valid Sri Lankan number.');
+    return;
+  }
+
+  const orderNumber = order.order_code || order.id?.slice(0, 8).toUpperCase() || '';
+  const items = (order.order_items || []).map(item =>
+    `• ${item.product_name} × ${item.quantity} - ${money(item.line_total)}`
+  ).join('\n');
+  const deliveryName = order.delivery_method === 'post' ? 'Post Office' : 'Courier';
+  const paymentName = order.payment_method === 'cod' ? 'Cash on Delivery' : 'Bank Transfer';
+
+  const message = [
+    `Hello ${order.customer_name || 'Customer'}!`,
+    '',
+    'Thank you for shopping with Glamour Store. Your order has been received successfully.',
+    '',
+    `Order ID: ${orderNumber}`,
+    'Items:',
+    items || 'Order items',
+    '',
+    `Delivery: ${deliveryName} (${money(order.delivery_fee)})`,
+    `Payment: ${paymentName}`,
+    `Order Total: ${money(order.total)}`,
+    `Current Status: ${order.status || 'New'}`,
+    '',
+    'Thank you! ❤️',
+    'Glamour Store'
+  ].join('\n');
+
+  const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+  window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+}
+
 export default function App() {
   const [tab, setTab] = useState('shop');
   const [adminTab, setAdminTab] = useState('products');
@@ -60,6 +155,10 @@ export default function App() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [trackingCode, setTrackingCode] = useState('');
+  const [trackingPhone, setTrackingPhone] = useState('');
+  const [trackingOrder, setTrackingOrder] = useState(null);
+  const [trackingLoading, setTrackingLoading] = useState(false);
 
   const [form, setForm] = useState({
     name: '', phone: '', address: '',
@@ -67,7 +166,7 @@ export default function App() {
   });
 
   const [newProduct, setNewProduct] = useState({
-    name: '', description: '', price: '', stock: ''
+    name: '', description: '', price: '', cost_price: '', stock: ''
   });
 
   const [manualForm, setManualForm] = useState({
@@ -134,6 +233,65 @@ export default function App() {
   const deliveredOrders = orders.filter(
     o => o.status === 'Delivered'
   );
+
+  // Sales and profit report calculations (cancelled orders are excluded).
+  const reportOrders = orders.filter(o => o.status !== 'Cancelled');
+  const reportItems = reportOrders.flatMap(o => o.order_items || []);
+  const totalProductRevenue = reportItems.reduce(
+    (sum, item) => sum + Number(item.line_total || 0), 0
+  );
+  const totalProductCost = reportItems.reduce(
+    (sum, item) => sum + Number(item.unit_cost || 0) * Number(item.quantity || 0), 0
+  );
+  const estimatedProfit = totalProductRevenue - totalProductCost;
+  const itemsWithoutCost = reportItems.filter(item => Number(item.unit_cost || 0) <= 0).length;
+
+  function colomboMonthParts(value) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Colombo', year: 'numeric', month: '2-digit', month: 'short'
+    }).formatToParts(new Date(value));
+    const get = type => parts.find(part => part.type === type)?.value || '';
+    return { key: `${get('year')}-${get('month')}`, label: `${get('month')} ${get('year')}` };
+  }
+
+  const monthlySales = (() => {
+    const totals = new Map();
+    const now = new Date();
+    for (let offset = 5; offset >= 0; offset--) {
+      const date = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      const month = colomboMonthParts(date);
+      totals.set(month.key, { ...month, revenue: 0, orders: 0 });
+    }
+
+    reportOrders.forEach(order => {
+      if (!order.created_at) return;
+      const month = colomboMonthParts(order.created_at);
+      if (!totals.has(month.key)) return;
+      const entry = totals.get(month.key);
+      entry.revenue += (order.order_items || []).reduce(
+        (sum, item) => sum + Number(item.line_total || 0), 0
+      );
+      entry.orders += 1;
+    });
+    return Array.from(totals.values());
+  })();
+
+  const bestSellingProducts = (() => {
+    const totals = new Map();
+    reportItems.forEach(item => {
+      const key = item.product_id || item.product_name;
+      const current = totals.get(key) || {
+        name: item.product_name || 'Product', quantity: 0, revenue: 0
+      };
+      current.quantity += Number(item.quantity || 0);
+      current.revenue += Number(item.line_total || 0);
+      totals.set(key, current);
+    });
+    return Array.from(totals.values())
+      .sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue)
+      .slice(0, 5);
+  })();
+  const maxMonthlySales = Math.max(1, ...monthlySales.map(month => month.revenue));
 
   async function loadProducts() {
     if (!supabase) return;
@@ -297,6 +455,53 @@ export default function App() {
     }
   }
 
+  async function trackCustomerOrder(e) {
+    e.preventDefault();
+
+    if (!supabase) {
+      setNotice('Supabase is not connected.');
+      return;
+    }
+
+    const code = trackingCode.trim().toUpperCase();
+    const phone = trackingPhone.trim();
+
+    if (!/^[0-9A-F]{8}$/.test(code)) {
+      setTrackingOrder(null);
+      setNotice('Please enter the 8-character Order ID shown after checkout.');
+      return;
+    }
+
+    if (phone.replace(/\D/g, '').length < 9) {
+      setTrackingOrder(null);
+      setNotice('Please enter a valid phone number.');
+      return;
+    }
+
+    setTrackingLoading(true);
+    setTrackingOrder(null);
+    setNotice('');
+
+    try {
+      const { data, error } = await supabase.rpc('track_customer_order', {
+        p_order_code: code,
+        p_phone: phone
+      });
+
+      if (error) throw error;
+      if (!data?.success) {
+        setNotice(data?.message || 'Order not found. Please check your details.');
+        return;
+      }
+
+      setTrackingOrder(data);
+    } catch (err) {
+      setNotice(err.message || 'Could not track this order. Please try again.');
+    } finally {
+      setTrackingLoading(false);
+    }
+  }
+
   async function signIn(e) {
     e.preventDefault();
 
@@ -451,7 +656,7 @@ export default function App() {
 
   function resetProductForm() {
     setNewProduct({
-      name: '', description: '', price: '', stock: ''
+      name: '', description: '', price: '', cost_price: '', stock: ''
     });
     setSelectedImage(null);
     setEditingProduct(null);
@@ -467,6 +672,7 @@ export default function App() {
       name: p.name || '',
       description: p.description || '',
       price: String(p.price ?? ''),
+      cost_price: String(p.cost_price ?? ''),
       stock: String(p.stock ?? '')
     });
 
@@ -493,8 +699,13 @@ export default function App() {
       return;
     }
 
-    if (newProduct.price === '' || Number(newProduct.price) < 0) {
-      setNotice('Please enter a valid product price.');
+    if (newProduct.price === '' || !Number.isFinite(Number(newProduct.price)) || Number(newProduct.price) < 0) {
+      setNotice('Please enter a valid selling price.');
+      return;
+    }
+
+    if (newProduct.cost_price === '' || !Number.isFinite(Number(newProduct.cost_price)) || Number(newProduct.cost_price) < 0) {
+      setNotice('Please enter a valid product cost price.');
       return;
     }
 
@@ -527,6 +738,7 @@ export default function App() {
             name: newProduct.name.trim(),
             description: newProduct.description,
             price: Number(newProduct.price),
+            cost_price: Number(newProduct.cost_price),
             stock: Number(newProduct.stock),
             image_url: imageUrl
           })
@@ -544,6 +756,7 @@ export default function App() {
           name: newProduct.name.trim(),
           description: newProduct.description,
           price: Number(newProduct.price),
+          cost_price: Number(newProduct.cost_price),
           stock: Number(newProduct.stock),
           image_url: imageUrl,
           active: true
@@ -833,6 +1046,13 @@ export default function App() {
           </button>
 
           <button
+            className={tab === 'tracking' ? 'nav active' : 'nav'}
+            onClick={() => { setTab('tracking'); setNotice(''); }}
+          >
+            <Search size={17} /> Track Order
+          </button>
+
+          <button
             className={tab === 'dashboard' ? 'nav active' : 'nav'}
             onClick={() => setTab('dashboard')}
           >
@@ -929,6 +1149,84 @@ export default function App() {
             )}
           </section>
           <footer>Glamour Store · Shop with love</footer>
+        </main>
+      )}
+
+
+      {tab === 'tracking' && (
+        <main className="section dashboard">
+          <div className="loginbox">
+            <span className="eyebrow">GLAMOUR STORE</span>
+            <h2>Track your order</h2>
+            <p>Enter the Order ID and the phone number used when placing your order.</p>
+
+            <form onSubmit={trackCustomerOrder}>
+              <label>
+                Order ID
+                <input
+                  required
+                  maxLength={8}
+                  placeholder="Example: A1B2C3D4"
+                  value={trackingCode}
+                  onChange={e => setTrackingCode(e.target.value.toUpperCase().replace(/[^0-9A-F]/g, '').slice(0, 8))}
+                />
+              </label>
+              <label>
+                Phone number
+                <input
+                  required
+                  type="tel"
+                  placeholder="Enter your order phone number"
+                  value={trackingPhone}
+                  onChange={e => setTrackingPhone(e.target.value)}
+                />
+              </label>
+              <button className="primary full" disabled={trackingLoading}>
+                {trackingLoading ? 'Checking order...' : 'Track order'}
+              </button>
+            </form>
+
+            {trackingOrder && (
+              <div className="panel" style={{ marginTop: '22px', textAlign: 'left' }}>
+                <span className="eyebrow">ORDER DETAILS</span>
+                <h3>Order #{trackingOrder.order_code}</h3>
+                <p>
+                  Order date: <b>{formatOrderDateTime(trackingOrder.created_at).date}</b>
+                  {' · '}
+                  <b>{formatOrderDateTime(trackingOrder.created_at).time}</b>
+                </p>
+                <div style={{
+                  marginTop: '16px', padding: '14px', borderRadius: '10px',
+                  background: trackingOrder.status === 'Cancelled' ? '#fee2e2' : '#fdf2f8',
+                  color: trackingOrder.status === 'Cancelled' ? '#991b1b' : '#831843'
+                }}>
+                  <small>Current order status</small>
+                  <h2 style={{ margin: '5px 0 0' }}>{trackingOrder.status}</h2>
+                </div>
+                <div style={{ marginTop: '18px' }}>
+                  {['New', 'Accepted', 'Packed', 'Dispatched', 'Delivered'].map((step, index) => {
+                    const steps = ['New', 'Accepted', 'Packed', 'Dispatched', 'Delivered'];
+                    const currentIndex = steps.indexOf(trackingOrder.status);
+                    const completed = trackingOrder.status !== 'Cancelled' && currentIndex >= index;
+                    return (
+                      <div key={step} style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '12px 0', opacity: completed ? 1 : 0.45 }}>
+                        <span style={{
+                          width: '25px', height: '25px', borderRadius: '50%',
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          background: completed ? '#16a34a' : '#e5e7eb',
+                          color: completed ? '#fff' : '#4b5563', fontWeight: 800, flexShrink: 0
+                        }}>{completed ? '✓' : index + 1}</span>
+                        <b>{step}</b>
+                      </div>
+                    );
+                  })}
+                  {trackingOrder.status === 'Cancelled' && (
+                    <p style={{ color: '#b91c1c', fontWeight: 700 }}>This order has been cancelled.</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </main>
       )}
 
@@ -1079,6 +1377,12 @@ export default function App() {
                       {lowStockCount + outOfStockCount}
                     </span>
                   )}
+                </button>
+                <button
+                  className={adminTab === 'reports' ? 'primary' : 'secondary'}
+                  onClick={() => setAdminTab('reports')}
+                >
+                  <TrendingUp size={16} /> Sales & Profit Reports
                 </button>
               </div>
 
@@ -1231,6 +1535,16 @@ export default function App() {
                         required
                         type="number"
                         min="0"
+                        step="0.01"
+                        placeholder="Cost Price / Purchase Price (Rs.)"
+                        value={newProduct.cost_price}
+                        onChange={e => setNewProduct({ ...newProduct, cost_price: e.target.value })}
+                      />
+
+                      <input
+                        required
+                        type="number"
+                        min="0"
                         step="1"
                         placeholder="Stock quantity"
                         value={newProduct.stock}
@@ -1320,7 +1634,7 @@ export default function App() {
 
                           <span style={{ flex: 1 }}>
                             <b>{p.name}</b>
-                            <small>{money(p.price)}</small>
+                            <small>Selling: {money(p.price)} · Cost: {money(p.cost_price)}</small>
                             <div style={{ marginTop: '5px' }}>
                               {stockBadge(p.stock)}
                             </div>
@@ -1366,6 +1680,90 @@ export default function App() {
                 </>
               )}
 
+              {adminTab === 'reports' && (
+                <div className="panel">
+                  <h3><TrendingUp size={18} /> Sales & Profit Reports</h3>
+                  <p className="muted">
+                    Reports exclude cancelled orders. Revenue and cost below are for products only; delivery fees are not included.
+                  </p>
+
+                  <div className="stats">
+                    <div>
+                      <small>Total Product Sales</small>
+                      <b>{money(totalProductRevenue)}</b>
+                    </div>
+                    <div>
+                      <small>Total Product Cost</small>
+                      <b>{money(totalProductCost)}</b>
+                    </div>
+                    <div>
+                      <small>Estimated Profit</small>
+                      <b style={{ color: estimatedProfit >= 0 ? '#15803d' : '#dc2626' }}>
+                        {money(estimatedProfit)}
+                      </b>
+                    </div>
+                    <div>
+                      <small>Included Orders</small>
+                      <b>{reportOrders.length}</b>
+                    </div>
+                  </div>
+
+                  {itemsWithoutCost > 0 && (
+                    <div style={{
+                      margin: '16px 0', padding: '12px 14px', borderRadius: '10px',
+                      background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa'
+                    }}>
+                      <b>Cost price needs attention</b>
+                      <p style={{ margin: '5px 0 0' }}>
+                        {itemsWithoutCost} order item(s) have a zero cost price. Profit may be overstated until their cost details are corrected. Older orders created before cost tracking usually appear here.
+                      </p>
+                    </div>
+                  )}
+
+                  <h3 style={{ marginTop: '28px' }}><CalendarDays size={18} /> Monthly Product Sales</h3>
+                  {monthlySales.map(month => (
+                    <div key={month.key} style={{ margin: '14px 0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '6px' }}>
+                        <b>{month.label}</b>
+                        <span>{money(month.revenue)} · {month.orders} order(s)</span>
+                      </div>
+                      <div style={{ height: '10px', borderRadius: '20px', background: '#f1e8eb', overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', width: `${(month.revenue / maxMonthlySales) * 100}%`,
+                          borderRadius: '20px', background: '#945c70'
+                        }} />
+                      </div>
+                    </div>
+                  ))}
+
+                  <h3 style={{ marginTop: '28px' }}><Package size={18} /> Best Selling Products</h3>
+                  {bestSellingProducts.length === 0 ? (
+                    <p className="muted">No sales data available yet.</p>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Product</th>
+                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Units sold</th>
+                            <th style={{ padding: '10px 8px', borderBottom: '1px solid #eadde2' }}>Product sales</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bestSellingProducts.map((product, index) => (
+                            <tr key={`${product.name}-${index}`}>
+                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>{product.name}</td>
+                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>{product.quantity}</td>
+                              <td style={{ padding: '10px 8px', borderBottom: '1px solid #f1e8eb' }}>{money(product.revenue)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {adminTab === 'orders' && (
                 <div className="panel">
                   <h3><ClipboardList size={18} /> Customer orders</h3>
@@ -1377,7 +1775,14 @@ export default function App() {
                       <div className="order" key={o.id}>
                         <div className="orderhead">
                           <b>#{o.id.slice(0, 8).toUpperCase()} · {o.customer_name}</b>
-                          <select
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <button type="button" className="secondary" onClick={() => openOrderWhatsApp(o)}>
+                              WhatsApp Customer
+                            </button>
+                            <button type="button" className="secondary" onClick={() => printOrderReceipt(o)}>
+                              Print / Save PDF
+                            </button>
+                            <select
                             value={o.status}
                             disabled={loading || o.status === 'Cancelled'}
                             onChange={e => updateOrder(o.id, e.target.value)}
@@ -1388,7 +1793,8 @@ export default function App() {
                             <option>Dispatched</option>
                             <option>Delivered</option>
                             <option>Cancelled</option>
-                          </select>
+                            </select>
+                          </div>
                         </div>
 
                         {(() => {
